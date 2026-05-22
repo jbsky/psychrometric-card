@@ -462,50 +462,6 @@ class PsychrometricCard extends HTMLElement {
           opacity: 0.7;
           font-size: 11px;
         }
-        .detail-panel {
-          margin-top: 12px;
-          padding: 12px;
-          background: rgba(255,255,255,0.05);
-          border: 1px solid rgba(255,255,255,0.1);
-          border-radius: 10px;
-          display: none;
-        }
-        .detail-panel.active {
-          display: block;
-        }
-        .detail-title {
-          font-size: 13px;
-          font-weight: 600;
-          color: var(--primary-text-color, #eee);
-          margin-bottom: 8px;
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        }
-        .detail-title .dot {
-          width: 10px;
-          height: 10px;
-          border-radius: 50%;
-          flex-shrink: 0;
-        }
-        .detail-table {
-          width: 100%;
-          border-collapse: collapse;
-          font-size: 12px;
-          font-variant-numeric: tabular-nums;
-        }
-        .detail-table td {
-          padding: 4px 8px;
-          color: var(--primary-text-color, #ccc);
-        }
-        .detail-table td:first-child {
-          opacity: 0.6;
-          white-space: nowrap;
-        }
-        .detail-table td:last-child {
-          font-weight: 600;
-          text-align: right;
-        }
       </style>
       <ha-card>
         <canvas id="psychro-canvas"></canvas>
@@ -516,16 +472,6 @@ class PsychrometricCard extends HTMLElement {
           <button id="btn-outdoor">Exterieur</button>
         </div>
         <div class="legend" id="legend"></div>
-        <div class="detail-panel" id="detail-panel">
-          <div class="detail-title"><div class="dot" id="detail-dot"></div><span id="detail-name"></span></div>
-          <table class="detail-table">
-            <tr><td>Temperature</td><td id="detail-temp">--</td></tr>
-            <tr><td>Humidite relative</td><td id="detail-hr">--</td></tr>
-            <tr><td>Humidite absolue</td><td id="detail-abs">--</td></tr>
-            <tr><td>Point de rosee</td><td id="detail-dew">--</td></tr>
-            <tr><td>Enthalpie</td><td id="detail-enth">--</td></tr>
-          </table>
-        </div>
       </ha-card>
     `;
 
@@ -713,36 +659,93 @@ class PsychrometricCard extends HTMLElement {
     this._resizeCanvas();
     this._chart.canvas = this._canvas;
     this._chart.draw(this._points);
+    // Draw detail overlay on canvas if a point is selected
+    if (this._selectedIdx !== null && this._selectedIdx !== undefined) {
+      this._drawDetailOnCanvas(this._selectedIdx);
+    }
   }
 
-  _showDetail(idx) {
-    const panel = this.shadowRoot.getElementById('detail-panel');
-    if (!panel || !this._points || !this._points[idx]) return;
+  _drawDetailOnCanvas(idx) {
+    if (!this._points || !this._points[idx]) return;
     const p = this._points[idx];
     if (p.temperature === null || p.humidity === null) return;
 
     const T = p.temperature;
     const HR = p.humidity;
-    const R = this.calc.calcR(HR, T) * 1000; // g/kg
+    const R = this.calc.calcR(HR, T) * 1000;
     const Tr = this.calc.calcTr(HR, T);
     const h = this.calc.calcEnthalpie(T, R / 1000);
 
-    this.shadowRoot.getElementById('detail-dot').style.background = p.color;
-    this.shadowRoot.getElementById('detail-name').textContent = p.name;
-    this.shadowRoot.getElementById('detail-temp').textContent = T.toFixed(1) + ' \u00b0C';
-    this.shadowRoot.getElementById('detail-hr').textContent = HR.toFixed(1) + ' %';
-    this.shadowRoot.getElementById('detail-abs').textContent = R.toFixed(2) + ' g/kg';
-    this.shadowRoot.getElementById('detail-dew').textContent = (Tr !== null ? Tr.toFixed(1) : '--') + ' \u00b0C';
-    this.shadowRoot.getElementById('detail-enth').textContent = h.toFixed(1) + ' kJ/kg';
+    const ctx = this._canvas.getContext('2d');
+    const w = this._chart.logicalWidth;
+    const margin = this._chart.margin;
 
-    panel.classList.add('active');
+    // Table dimensions
+    const tableW = 170;
+    const lineH = 18;
+    const rows = [
+      ['Temperature', T.toFixed(1) + ' \u00b0C'],
+      ['HR', HR.toFixed(1) + ' %'],
+      ['Abs', R.toFixed(2) + ' g/kg'],
+      ['Pt rosee', (Tr !== null ? Tr.toFixed(1) : '--') + ' \u00b0C'],
+      ['Enthalpie', h.toFixed(1) + ' kJ/kg'],
+    ];
+    const tableH = lineH * rows.length + 30; // +30 for title
+    const tableX = margin.left + 10;
+    const tableY = margin.top + 10;
+
+    // Background
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+    ctx.beginPath();
+    ctx.roundRect(tableX, tableY, tableW, tableH, 8);
+    ctx.fill();
+    ctx.strokeStyle = p.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(tableX, tableY, tableW, tableH, 8);
+    ctx.stroke();
+
+    // Title
+    ctx.fillStyle = p.color;
+    ctx.font = 'bold 12px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('\u25cf ' + p.name, tableX + 10, tableY + 18);
+
+    // Separator
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(tableX + 8, tableY + 26);
+    ctx.lineTo(tableX + tableW - 8, tableY + 26);
+    ctx.stroke();
+
+    // Rows
+    ctx.font = '11px sans-serif';
+    rows.forEach((row, i) => {
+      const y = tableY + 30 + i * lineH + 12;
+      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.textAlign = 'left';
+      ctx.fillText(row[0], tableX + 10, y);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 11px sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(row[1], tableX + tableW - 10, y);
+      ctx.font = '11px sans-serif';
+    });
+  }
+
+  _showDetail(idx) {
+    if (!this._points || !this._points[idx]) return;
+    const p = this._points[idx];
+    if (p.temperature === null || p.humidity === null) return;
     this._selectedIdx = idx;
+    this._drawChart();
   }
 
   _hideDetail() {
-    const panel = this.shadowRoot.getElementById('detail-panel');
-    if (panel) panel.classList.remove('active');
     this._selectedIdx = null;
+    this._drawChart();
+  }
   }
 
   getCardSize() { return 6; }
