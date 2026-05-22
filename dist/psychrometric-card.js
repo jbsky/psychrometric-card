@@ -205,7 +205,6 @@ class PsychroChart {
     const hMin = Math.round(this.calc.calcEnthalpie(this.Xmin, this.Ymin / 1000));
     const hMax = Math.round(this.calc.calcEnthalpie(this.Xmax, this.Ymax / 1000));
     ctx.strokeStyle = this.colors.enthalpy_lines;
-    ctx.globalAlpha = 0.3;
     ctx.lineWidth = 0.5;
     for (let h = hMin; h <= hMax; h += 10) {
       const T1 = this.calc.calcTsecDepuisEnthalpie(h, Rsat);
@@ -217,10 +216,21 @@ class PsychroChart {
       if (x1 < this.Xmin) { const r = (this.Xmin - x2) / (x1 - x2); y1 = y2 + (y1 - y2) * r; x1 = this.Xmin; }
       if (x2 > this.Xmax) { const r = (this.Xmax - x1) / (x2 - x1); y2 = y1 + (y2 - y1) * r; x2 = this.Xmax; }
       if (x1 >= this.Xmin && x2 <= this.Xmax && y1 <= this.Ymax && y2 >= this.Ymin) {
+        ctx.globalAlpha = 0.3;
         ctx.beginPath();
         ctx.moveTo(this.toCanvasX(x1), this.toCanvasY(y1));
         ctx.lineTo(this.toCanvasX(x2), this.toCanvasY(y2));
         ctx.stroke();
+        // Label enthalpie on the line (at the top/left end)
+        ctx.globalAlpha = 0.5;
+        ctx.fillStyle = this.colors.enthalpy_lines;
+        ctx.font = '9px sans-serif';
+        ctx.textAlign = 'center';
+        const lx = this.toCanvasX(x1);
+        const ly = this.toCanvasY(y1);
+        if (ly > this.margin.top + 10 && lx > this.margin.left + 10) {
+          ctx.fillText(h + '', lx - 8, ly - 3);
+        }
       }
     }
     ctx.globalAlpha = 1;
@@ -371,24 +381,22 @@ class PsychrometricCard extends HTMLElement {
     this.shadowRoot.innerHTML = `
       <style>
         :host { display: block; }
-        .card {
-          background: var(--ha-card-background, var(--card-background-color, #1c1c1e));
-          border-radius: var(--ha-card-border-radius, 12px);
-          box-shadow: var(--ha-card-box-shadow, none);
+        ha-card {
           padding: 16px;
           overflow: hidden;
+          box-sizing: border-box;
         }
         canvas {
           display: block;
+          width: 100%;
           border-radius: 8px;
-          max-width: 100%;
         }
         .toolbar {
           display: flex;
           align-items: center;
           gap: 8px;
           margin: 12px 0 10px 0;
-          padding: 0 4px;
+          padding: 0;
         }
         .toolbar button {
           background: rgba(255,255,255,0.1);
@@ -410,7 +418,7 @@ class PsychrometricCard extends HTMLElement {
           display: flex;
           flex-wrap: wrap;
           gap: 4px 8px;
-          padding: 0 4px;
+          padding: 0;
         }
         .legend-item {
           display: inline-flex;
@@ -454,8 +462,52 @@ class PsychrometricCard extends HTMLElement {
           opacity: 0.7;
           font-size: 11px;
         }
+        .detail-panel {
+          margin-top: 12px;
+          padding: 12px;
+          background: rgba(255,255,255,0.05);
+          border: 1px solid rgba(255,255,255,0.1);
+          border-radius: 10px;
+          display: none;
+        }
+        .detail-panel.active {
+          display: block;
+        }
+        .detail-title {
+          font-size: 13px;
+          font-weight: 600;
+          color: var(--primary-text-color, #eee);
+          margin-bottom: 8px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .detail-title .dot {
+          width: 10px;
+          height: 10px;
+          border-radius: 50%;
+          flex-shrink: 0;
+        }
+        .detail-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 12px;
+          font-variant-numeric: tabular-nums;
+        }
+        .detail-table td {
+          padding: 4px 8px;
+          color: var(--primary-text-color, #ccc);
+        }
+        .detail-table td:first-child {
+          opacity: 0.6;
+          white-space: nowrap;
+        }
+        .detail-table td:last-child {
+          font-weight: 600;
+          text-align: right;
+        }
       </style>
-      <div class="card">
+      <ha-card>
         <canvas id="psychro-canvas"></canvas>
         <div class="toolbar">
           <button id="btn-all">Tout afficher</button>
@@ -464,7 +516,17 @@ class PsychrometricCard extends HTMLElement {
           <button id="btn-outdoor">Exterieur</button>
         </div>
         <div class="legend" id="legend"></div>
-      </div>
+        <div class="detail-panel" id="detail-panel">
+          <div class="detail-title"><div class="dot" id="detail-dot"></div><span id="detail-name"></span></div>
+          <table class="detail-table">
+            <tr><td>Temperature</td><td id="detail-temp">--</td></tr>
+            <tr><td>Humidite relative</td><td id="detail-hr">--</td></tr>
+            <tr><td>Humidite absolue</td><td id="detail-abs">--</td></tr>
+            <tr><td>Point de rosee</td><td id="detail-dew">--</td></tr>
+            <tr><td>Enthalpie</td><td id="detail-enth">--</td></tr>
+          </table>
+        </div>
+      </ha-card>
     `;
 
     this._canvas = this.shadowRoot.getElementById('psychro-canvas');
@@ -511,6 +573,12 @@ class PsychrometricCard extends HTMLElement {
       this._visibility[idx] = !this._visibility[idx];
       this._saveVisibility();
       this._applyVisibility();
+      // Show detail panel for this point if now visible
+      if (this._visibility[idx]) {
+        this._showDetail(idx);
+      } else {
+        this._hideDetail();
+      }
     });
 
     // Build legend items once
@@ -533,8 +601,9 @@ class PsychrometricCard extends HTMLElement {
     this._aspectRatio = 900 / height; // width/height ratio
     this._resizeCanvas();
     this._chart = new PsychroChart(this._canvas, this._config);
+    this.calc = new PsychroCalc();
     // Set logical dimensions from actual container size
-    const container = this.shadowRoot.querySelector('.card');
+    const container = this.shadowRoot.querySelector('ha-card');
     const cw = Math.max((container ? container.clientWidth - 32 : 900), 280);
     this._chart.logicalWidth = cw;
     this._chart.logicalHeight = Math.round(cw / this._aspectRatio);
@@ -548,7 +617,7 @@ class PsychrometricCard extends HTMLElement {
         this._drawChart();
       }
     });
-    this._resizeObserver.observe(this.shadowRoot.querySelector('.card'));
+    this._resizeObserver.observe(this.shadowRoot.querySelector('ha-card'));
   }
 
   // Called on every hass update - only updates values, never rebuilds DOM
@@ -596,6 +665,10 @@ class PsychrometricCard extends HTMLElement {
     if (valuesHash !== this._lastValues) {
       this._lastValues = valuesHash;
       this._drawChart();
+      // Update detail panel if open
+      if (this._selectedIdx !== null && this._selectedIdx !== undefined) {
+        this._showDetail(this._selectedIdx);
+      }
     }
   }
 
@@ -618,15 +691,14 @@ class PsychrometricCard extends HTMLElement {
   }
 
   _resizeCanvas() {
-    const container = this.shadowRoot.querySelector('.card');
+    const container = this.shadowRoot.querySelector('ha-card');
     if (!container || !this._canvas) return;
     const dpr = window.devicePixelRatio || 1;
-    const containerWidth = container.clientWidth - 32; // minus padding (16px each side)
-    const w = Math.max(containerWidth, 280);
+    const w = Math.max(container.clientWidth - 32, 280); // clientWidth includes padding, subtract it
     const h = Math.round(w / this._aspectRatio);
     this._canvas.width = w * dpr;
     this._canvas.height = h * dpr;
-    this._canvas.style.width = w + 'px';
+    this._canvas.style.width = '100%';
     this._canvas.style.height = h + 'px';
     this._canvas.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
     // Update chart logical dimensions
@@ -641,6 +713,36 @@ class PsychrometricCard extends HTMLElement {
     this._resizeCanvas();
     this._chart.canvas = this._canvas;
     this._chart.draw(this._points);
+  }
+
+  _showDetail(idx) {
+    const panel = this.shadowRoot.getElementById('detail-panel');
+    if (!panel || !this._points || !this._points[idx]) return;
+    const p = this._points[idx];
+    if (p.temperature === null || p.humidity === null) return;
+
+    const T = p.temperature;
+    const HR = p.humidity;
+    const R = this.calc.calcR(HR, T) * 1000; // g/kg
+    const Tr = this.calc.calcTr(HR, T);
+    const h = this.calc.calcEnthalpie(T, R / 1000);
+
+    this.shadowRoot.getElementById('detail-dot').style.background = p.color;
+    this.shadowRoot.getElementById('detail-name').textContent = p.name;
+    this.shadowRoot.getElementById('detail-temp').textContent = T.toFixed(1) + ' \u00b0C';
+    this.shadowRoot.getElementById('detail-hr').textContent = HR.toFixed(1) + ' %';
+    this.shadowRoot.getElementById('detail-abs').textContent = R.toFixed(2) + ' g/kg';
+    this.shadowRoot.getElementById('detail-dew').textContent = (Tr !== null ? Tr.toFixed(1) : '--') + ' \u00b0C';
+    this.shadowRoot.getElementById('detail-enth').textContent = h.toFixed(1) + ' kJ/kg';
+
+    panel.classList.add('active');
+    this._selectedIdx = idx;
+  }
+
+  _hideDetail() {
+    const panel = this.shadowRoot.getElementById('detail-panel');
+    if (panel) panel.classList.remove('active');
+    this._selectedIdx = null;
   }
 
   getCardSize() { return 6; }
