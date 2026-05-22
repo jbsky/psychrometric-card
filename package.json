@@ -1,0 +1,21 @@
+{
+  "name": "psychrometric-card",
+  "version": "1.0.0",
+  "description": "Psychrometric chart card for Home Assistant",
+  "author": "Julien Blais",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jbsky/psychrometric-card"
+  },
+  "keywords": [
+    "home-assistant",
+    "lovelace",
+    "custom-card",
+    "psychrometric",
+    "hvac",
+    "climate",
+    "temperature",
+    "humidity"
+  ]
+}
