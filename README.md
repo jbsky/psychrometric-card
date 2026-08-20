@@ -9,11 +9,13 @@ A custom Lovelace card that displays an interactive psychrometric (Mollier) diag
 - Real-time psychrometric diagram with sensor data points
 - Interactive legend with click-to-toggle visibility per sensor
 - Quick filter buttons: Show All / Hide All / Indoor / Outdoor
+- Two-point comparison: click two sensors to see the difference between them
 - Comfort zone visualization
 - Relative humidity curves (10% to 100%)
 - Enthalpy lines
 - Dew point temperature display
-- Dark mode support
+- Follows the Home Assistant theme: the canvas paints no background of its own, so a glass
+  or translucent theme shows through, and text follows `--primary-text-color`
 - Fully responsive (desktop, tablet, mobile)
 - High-DPI / Retina display support
 - Visibility state persisted in localStorage
@@ -67,7 +69,8 @@ sensors:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `dark_mode` | boolean | `false` | Enable dark theme |
+| `dark_mode` | boolean | `true` | Palette for a dark background (curves, labels, point halo) |
+| `background` | string | `transparent` | Canvas background. Leave it alone to let the card's own background show through; set a CSS colour (e.g. `"#1c1c1e"`) to paint an opaque panel instead |
 | `temp_min` | number | `-5` | Minimum temperature on X axis (C) |
 | `temp_max` | number | `45` | Maximum temperature on X axis (C) |
 | `humidity_max` | number | `25` | Maximum absolute humidity on Y axis (g/kg) |
@@ -83,6 +86,24 @@ sensors:
 | `humidity` | string | required | Relative humidity sensor entity ID |
 | `color` | string | auto | Point color (hex) |
 | `outdoor` | boolean | `false` | Mark as outdoor sensor (for filter button) |
+
+## Theming
+
+The card draws on a `<canvas>`, and a canvas cannot inherit a background: whatever it paints
+covers the card underneath it. So it paints nothing by default, and the `<ha-card>` behind it
+carries the theme background, glass and `backdrop-filter` included.
+
+The chart text and grid read `--primary-text-color` from the theme, re-read on every draw, so a
+theme change lands without rebuilding the card. `dark_mode` still picks the palette for
+everything the theme has no opinion about: the humidity curves, the enthalpy lines and the halo
+drawn around each point.
+
+To go back to a solid panel, name a colour:
+
+```yaml
+type: custom:psychrometric-card
+background: "#1c1c1e"
+```
 
 ## Understanding the Chart
 

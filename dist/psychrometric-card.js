@@ -3,7 +3,15 @@
  * Based on https://github.com/jbsky/Psychrometrique
  * Renders a psychrometric diagram with live HA sensor data points
  * Interactive legend: click to enable/disable individual points
+ * Click on chart points to show detail / 2-point comparison
  */
+
+const POINT_COLORS = [
+  '#f44336', '#e91e63', '#9c27b0', '#673ab7', '#3f51b5',
+  '#2196f3', '#03a9f4', '#00bcd4', '#009688', '#4caf50',
+  '#8bc34a', '#cddc39', '#ffc107', '#ff9800', '#ff5722',
+  '#795548', '#607d8b'
+];
 
 // ===== Psychrometric Calculations =====
 class PsychroCalc {
@@ -76,17 +84,34 @@ class PsychroChart {
     this.Ymin = 0;
     this.Ymax = config.humidity_max !== undefined ? config.humidity_max : 25;
 
-    this.colors = {
-      background: config.dark_mode ? '#1c1c1e' : '#ffffff',
-      grid: config.dark_mode ? '#333333' : '#e0e0e0',
+    this.dark_mode = config.dark_mode !== undefined ? config.dark_mode : true;
+
+    // Fond du canvas. Par defaut on ne peint rien : la <ha-card> porte deja le
+    // fond du theme, verre translucide compris. Un fillRect opaque ici le
+    // masque, et aucune CSS ne peut le rattraper (ce sont des pixels de canvas,
+    // pas du DOM). `background: '#1c1c1e'` restaure l'ancien fond plein.
+    this.background = config.background !== undefined ? config.background : 'transparent';
+
+    // Repli quand le theme n'expose pas la variable CSS correspondante.
+    this.fallback = {
       text: config.dark_mode ? '#cccccc' : '#333333',
+      point_stroke: config.dark_mode ? 'rgba(0, 0, 0, 0.55)' : 'rgba(255, 255, 255, 0.85)',
+    };
+
+    this.colors = {
+      background: this.background,
+      grid: this.fallback.text,
+      text: this.fallback.text,
+      point_stroke: this.fallback.point_stroke,
       saturation: config.dark_mode ? '#ff6b6b' : '#d32f2f',
       hr_lines: config.dark_mode ? '#ff8a80' : '#e57373',
       enthalpy_lines: config.dark_mode ? '#ffab40' : '#f57c00',
       comfort_zone: config.dark_mode ? 'rgba(76, 175, 80, 0.15)' : 'rgba(76, 175, 80, 0.1)',
     };
+    // La grille reprend la couleur du texte, diluee au trace.
+    this.gridAlpha = 0.18;
 
-    this.margin = { top: 20, right: 50, bottom: 40, left: 50 };
+    this.margin = { top: 10, right: 25, bottom: 20, left: 5 };
     this.logicalWidth = 900;
     this.logicalHeight = config.height || 450;
   }
@@ -102,11 +127,29 @@ class PsychroChart {
     return this.logicalHeight - this.margin.bottom - (R - this.Ymin) / (this.Ymax - this.Ymin) * this.height;
   }
 
+  // Les proprietes CSS personnalisees traversent les frontieres de shadow DOM
+  // par heritage : le canvas voit donc les variables posees par le theme sur
+  // <html> / <ha-card>. Relu a chaque trace pour suivre un changement de theme
+  // sans reconstruire la carte.
+  readThemeColors() {
+    let cs = null;
+    try { cs = this.canvas ? getComputedStyle(this.canvas) : null; } catch (e) { cs = null; }
+    const v = cs ? cs.getPropertyValue('--primary-text-color').trim() : '';
+    this.colors.text = v || this.fallback.text;
+    // Pas --divider-color : il vaut rgba(0,0,0,.12) dans les themes clairs de
+    // HA et disparaitrait sur une photo sombre.
+    this.colors.grid = this.colors.text;
+  }
+
   draw(points) {
     const ctx = this.ctx;
+    this.readThemeColors();
     ctx.clearRect(0, 0, this.logicalWidth, this.logicalHeight);
-    ctx.fillStyle = this.colors.background;
-    ctx.fillRect(0, 0, this.logicalWidth, this.logicalHeight);
+    const bg = this.colors.background;
+    if (bg && bg !== 'transparent' && bg !== 'none') {
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, this.logicalWidth, this.logicalHeight);
+    }
 
     this.drawComfortZone();
     this.drawGrid();
@@ -114,7 +157,6 @@ class PsychroChart {
     this.drawEnthalpyLines();
     this.drawAxes();
     this.drawPoints(points);
-    this.drawTitle();
   }
 
   drawComfortZone() {
@@ -139,7 +181,7 @@ class PsychroChart {
     ctx.closePath();
     ctx.fill();
 
-    ctx.fillStyle = this.colors.dark_mode ? 'rgba(76, 175, 80, 0.6)' : 'rgba(76, 175, 80, 0.5)';
+    ctx.fillStyle = this.dark_mode ? 'rgba(76, 175, 80, 0.6)' : 'rgba(76, 175, 80, 0.5)';
     ctx.font = '11px sans-serif';
     ctx.textAlign = 'center';
     const midT = 23, midR = this.calc.calcR(50, 23) * 1000;
@@ -150,6 +192,7 @@ class PsychroChart {
     const ctx = this.ctx;
     ctx.strokeStyle = this.colors.grid;
     ctx.lineWidth = 0.5;
+    ctx.globalAlpha = this.gridAlpha;
     for (let T = Math.ceil(this.Xmin / 5) * 5; T <= this.Xmax; T += 5) {
       ctx.beginPath();
       ctx.moveTo(this.toCanvasX(T), this.toCanvasY(this.Ymin));
@@ -162,6 +205,7 @@ class PsychroChart {
       ctx.lineTo(this.toCanvasX(this.Xmax), this.toCanvasY(R));
       ctx.stroke();
     }
+    ctx.globalAlpha = 1;
   }
 
   drawHRCurves() {
@@ -252,20 +296,18 @@ class PsychroChart {
     ctx.font = '11px sans-serif';
     ctx.textAlign = 'center';
     for (let T = Math.ceil(this.Xmin / 5) * 5; T <= this.Xmax; T += 5) {
-      ctx.fillText(T + '\u00b0C', this.toCanvasX(T), this.toCanvasY(this.Ymin) + 15);
+      ctx.fillText(T + '\u00b0', this.toCanvasX(T), this.toCanvasY(this.Ymin) + 13);
     }
     ctx.textAlign = 'left';
     for (let R = 0; R <= this.Ymax; R += 5) {
-      ctx.fillText(R + ' g/kg', this.toCanvasX(this.Xmax) + 5, this.toCanvasY(R) + 4);
+      ctx.fillText(R, this.toCanvasX(this.Xmax) + 5, this.toCanvasY(R) + 4);
     }
-    ctx.font = '12px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('Temperature seche (\u00b0C)', this.toCanvasX((this.Xmin + this.Xmax) / 2), this.logicalHeight - 5);
-    ctx.save();
-    ctx.translate(this.logicalWidth - 10, this.toCanvasY((this.Ymin + this.Ymax) / 2));
-    ctx.rotate(-Math.PI / 2);
-    ctx.fillText('Humidite absolue (g/kg air sec)', 0, 0);
-    ctx.restore();
+    // Axis labels aligned with axes
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('T (\u00b0C)', this.toCanvasX(this.Xmin), this.toCanvasY(this.Ymin) + 13);
+    ctx.textAlign = 'left';
+    ctx.fillText('H', this.toCanvasX(this.Xmax) + 5, this.toCanvasY(this.Ymax) - 5);
   }
 
   drawPoints(points) {
@@ -287,22 +329,10 @@ class PsychroChart {
       ctx.arc(x, y, 6, 0, Math.PI * 2);
       ctx.fillStyle = color;
       ctx.fill();
-      ctx.strokeStyle = this.colors.background;
+      ctx.strokeStyle = this.colors.point_stroke;
       ctx.lineWidth = 2;
       ctx.stroke();
-      ctx.fillStyle = color;
-      ctx.font = 'bold 10px sans-serif';
-      ctx.textAlign = 'left';
-      ctx.fillText(`${p.name} (${T.toFixed(1)}\u00b0C, ${HR.toFixed(0)}%)`, x + 9, y + 4);
     }
-  }
-
-  drawTitle() {
-    const ctx = this.ctx;
-    ctx.fillStyle = this.colors.text;
-    ctx.font = 'bold 14px sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText('Diagramme Psychrometrique', this.margin.left, 15);
   }
 }
 
@@ -315,6 +345,8 @@ class PsychrometricCard extends HTMLElement {
     this._visibility = {};
     this._legendBuilt = false;
     this._lastValues = '';
+    this._selectedIdx = null;
+    this._selectedIdx2 = null;
   }
 
   set hass(hass) {
@@ -331,8 +363,8 @@ class PsychrometricCard extends HTMLElement {
       throw new Error('You need to define at least one sensor pair');
     }
     this._config = {
-      title: config.title || 'Diagramme Psychrometrique',
       dark_mode: config.dark_mode !== undefined ? config.dark_mode : true,
+      background: config.background,
       temp_min: config.temp_min !== undefined ? config.temp_min : -5,
       temp_max: config.temp_max !== undefined ? config.temp_max : 45,
       humidity_max: config.humidity_max !== undefined ? config.humidity_max : 25,
@@ -371,96 +403,112 @@ class PsychrometricCard extends HTMLElement {
 
   _initialize() {
     const height = this._config.height;
-    const pointColors = [
-      '#f44336', '#e91e63', '#9c27b0', '#673ab7', '#3f51b5',
-      '#2196f3', '#03a9f4', '#00bcd4', '#009688', '#4caf50',
-      '#8bc34a', '#cddc39', '#ffc107', '#ff9800', '#ff5722',
-      '#795548', '#607d8b'
-    ];
 
     this.shadowRoot.innerHTML = `
       <style>
-        :host { display: block; }
+        :host {
+          display: block;
+          width: 100%;
+          height: 100%;
+          min-width: 0;
+        }
         ha-card {
-          padding: 16px;
+          padding: 8px;
           overflow: hidden;
           box-sizing: border-box;
+          height: 100%;
+          width: 100%;
         }
         canvas {
           display: block;
           width: 100%;
           border-radius: 8px;
+          cursor: crosshair;
         }
         .toolbar {
           display: flex;
           align-items: center;
-          gap: 8px;
-          margin: 12px 0 10px 0;
+          gap: 6px;
+          margin: 8px 0 6px 0;
           padding: 0;
+          flex-wrap: wrap;
         }
         .toolbar button {
-          background: rgba(255,255,255,0.1);
-          color: var(--primary-text-color, #ccc);
-          border: 1px solid rgba(255,255,255,0.15);
-          border-radius: 8px;
-          padding: 6px 12px;
-          font-size: 12px;
+          background: rgba(255,255,255,0.08);
+          color: var(--primary-text-color, #aaa);
+          border: 1px solid rgba(255,255,255,0.12);
+          border-radius: 6px;
+          padding: 4px 10px;
+          font-size: 11px;
           cursor: pointer;
           transition: background 0.2s;
         }
         .toolbar button:hover {
-          background: rgba(255,255,255,0.2);
+          background: rgba(255,255,255,0.15);
         }
         .toolbar button:active {
-          background: rgba(255,255,255,0.3);
+          background: rgba(255,255,255,0.25);
         }
         .legend {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 4px 8px;
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+          gap: 3px;
           padding: 0;
         }
         .legend-item {
-          display: inline-flex;
+          display: flex;
           align-items: center;
           gap: 6px;
-          font-size: 12px;
+          font-size: 11px;
           color: var(--primary-text-color, #ccc);
           cursor: pointer;
-          padding: 5px 10px;
-          border-radius: 8px;
-          border: 1px solid rgba(255,255,255,0.1);
-          transition: all 0.2s;
+          padding: 4px 8px;
+          border-radius: 6px;
+          border: 1px solid rgba(255,255,255,0.08);
+          transition: all 0.15s;
           user-select: none;
           -webkit-user-select: none;
+          overflow: hidden;
         }
         .legend-item:hover {
-          background: rgba(255,255,255,0.1);
-          border-color: rgba(255,255,255,0.25);
+          background: rgba(255,255,255,0.08);
+          border-color: rgba(255,255,255,0.2);
         }
         .legend-item:active {
-          transform: scale(0.95);
+          transform: scale(0.97);
         }
         .legend-item[data-visible="false"] {
-          opacity: 0.3;
-          border-color: rgba(255,255,255,0.05);
+          opacity: 0.25;
+          border-color: transparent;
         }
         .legend-item[data-visible="false"] .dot {
           background: #555 !important;
         }
+        .legend-item[data-selected="true"] {
+          border-color: var(--legend-sel-color, rgba(255,255,255,0.5));
+          background: rgba(255,255,255,0.06);
+          box-shadow: 0 0 0 1px var(--legend-sel-color, rgba(255,255,255,0.3));
+        }
         .dot {
-          width: 12px;
-          height: 12px;
+          width: 10px;
+          height: 10px;
           border-radius: 50%;
           flex-shrink: 0;
         }
         .legend-name {
           font-weight: 500;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          flex: 1;
+          min-width: 0;
         }
         .legend-val {
           font-variant-numeric: tabular-nums;
-          opacity: 0.7;
-          font-size: 11px;
+          opacity: 0.6;
+          font-size: 10px;
+          white-space: nowrap;
+          margin-left: auto;
         }
       </style>
       <ha-card>
@@ -519,17 +567,15 @@ class PsychrometricCard extends HTMLElement {
       this._visibility[idx] = !this._visibility[idx];
       this._saveVisibility();
       this._applyVisibility();
-      // Show detail panel for this point if now visible
-      if (this._visibility[idx]) {
-        this._showDetail(idx);
-      } else {
+      // Hide detail if the selected point was just hidden
+      if (this._selectedIdx === idx && !this._visibility[idx]) {
         this._hideDetail();
       }
     });
 
     // Build legend items once
     this._config.sensors.forEach((sensor, idx) => {
-      const color = sensor.color || pointColors[idx % pointColors.length];
+      const color = sensor.color || POINT_COLORS[idx % POINT_COLORS.length];
       const item = document.createElement('div');
       item.className = 'legend-item';
       item.dataset.idx = idx;
@@ -543,25 +589,92 @@ class PsychrometricCard extends HTMLElement {
     });
     this._legendBuilt = true;
 
+    // Click on canvas to select nearest point (supports 2-point comparison)
+    this._canvas.addEventListener('click', (e) => {
+      if (!this._points || !this._chart) return;
+      const rect = this._canvas.getBoundingClientRect();
+      const scaleX = this._chart.logicalWidth / rect.width;
+      const scaleY = this._chart.logicalHeight / rect.height;
+      const cx = (e.clientX - rect.left) * scaleX;
+      const cy = (e.clientY - rect.top) * scaleY;
+
+      let bestIdx = -1;
+      let bestDist = Infinity;
+      const hitRadius = 20; // logical pixels
+
+      for (let i = 0; i < this._points.length; i++) {
+        const p = this._points[i];
+        if (!p.visible || p.temperature === null || p.humidity === null) continue;
+        const R = this.calc.calcR(p.humidity, p.temperature) * 1000;
+        const px = this._chart.toCanvasX(p.temperature);
+        const py = this._chart.toCanvasY(R);
+        const dist = Math.hypot(cx - px, cy - py);
+        if (dist < hitRadius && dist < bestDist) {
+          bestDist = dist;
+          bestIdx = i;
+        }
+      }
+
+      if (bestIdx >= 0) {
+        // Clicked on a point
+        if (this._selectedIdx === bestIdx) {
+          // Deselect first point
+          this._hideDetail();
+        } else if (this._selectedIdx2 === bestIdx) {
+          // Deselect second point → back to single
+          this._selectedIdx2 = null;
+          this._drawChart();
+        } else if (this._selectedIdx === null) {
+          // No selection → select first
+          this._showDetail(bestIdx);
+        } else if (this._selectedIdx2 === null) {
+          // Already one selected → select second for comparison
+          this._selectedIdx2 = bestIdx;
+          this._drawChart();
+        } else {
+          // Both slots full → replace second
+          this._selectedIdx2 = bestIdx;
+          this._drawChart();
+        }
+      } else {
+        // Clicked empty space → clear all
+        this._hideDetail();
+      }
+    });
+
     // Canvas setup - responsive to container width
     this._aspectRatio = 900 / height; // width/height ratio
-    this._resizeCanvas();
     this._chart = new PsychroChart(this._canvas, this._config);
     this.calc = new PsychroCalc();
-    // Set logical dimensions from actual container size
-    const container = this.shadowRoot.querySelector('ha-card');
-    const cw = Math.max((container ? container.clientWidth - 32 : 900), 280);
-    this._chart.logicalWidth = cw;
-    this._chart.logicalHeight = Math.round(cw / this._aspectRatio);
     this._points = [];
 
-    // Redraw on container resize (mobile rotation, panel resize, etc.)
-    this._resizeObserver = new ResizeObserver(() => {
-      this._resizeCanvas();
-      if (this._chart) {
-        this._chart.canvas = this._canvas;
-        this._drawChart();
+    // Defer initial sizing to after layout is complete
+    const doInitialSize = () => {
+      const container = this.shadowRoot.querySelector('ha-card');
+      const cw = Math.max((container ? container.clientWidth - 16 : 900), 280);
+      if (cw <= 280 && container && container.clientWidth === 0) {
+        // Not laid out yet, retry
+        requestAnimationFrame(doInitialSize);
+        return;
       }
+      this._chart.logicalWidth = cw;
+      this._chart.logicalHeight = Math.round(cw / this._aspectRatio);
+      this._resizeCanvas();
+      this._drawChart();
+    };
+    requestAnimationFrame(doInitialSize);
+
+    // Redraw on container resize (debounced)
+    this._resizeTimeout = null;
+    this._resizeObserver = new ResizeObserver(() => {
+      if (this._resizeTimeout) cancelAnimationFrame(this._resizeTimeout);
+      this._resizeTimeout = requestAnimationFrame(() => {
+        this._resizeCanvas();
+        if (this._chart) {
+          this._chart.canvas = this._canvas;
+          this._drawChart();
+        }
+      });
     });
     this._resizeObserver.observe(this.shadowRoot.querySelector('ha-card'));
   }
@@ -569,13 +682,6 @@ class PsychrometricCard extends HTMLElement {
   // Called on every hass update - only updates values, never rebuilds DOM
   _updateData() {
     if (!this._hass || !this._config || !this._legendBuilt) return;
-
-    const pointColors = [
-      '#f44336', '#e91e63', '#9c27b0', '#673ab7', '#3f51b5',
-      '#2196f3', '#03a9f4', '#00bcd4', '#009688', '#4caf50',
-      '#8bc34a', '#cddc39', '#ffc107', '#ff9800', '#ff5722',
-      '#795548', '#607d8b'
-    ];
 
     let valuesHash = '';
 
@@ -602,7 +708,7 @@ class PsychrometricCard extends HTMLElement {
         name: sensor.name || sensor.temperature.split('.')[1],
         temperature: validTemp,
         humidity: validHum,
-        color: sensor.color || pointColors[idx % pointColors.length],
+        color: sensor.color || POINT_COLORS[idx % POINT_COLORS.length],
         visible: this._visibility[idx] !== false,
       };
     });
@@ -640,7 +746,7 @@ class PsychrometricCard extends HTMLElement {
     const container = this.shadowRoot.querySelector('ha-card');
     if (!container || !this._canvas) return;
     const dpr = window.devicePixelRatio || 1;
-    const w = Math.max(container.clientWidth - 32, 280); // clientWidth includes padding, subtract it
+    const w = Math.max(container.clientWidth - 16, 280); // 8px padding each side
     const h = Math.round(w / this._aspectRatio);
     this._canvas.width = w * dpr;
     this._canvas.height = h * dpr;
@@ -659,10 +765,31 @@ class PsychrometricCard extends HTMLElement {
     this._resizeCanvas();
     this._chart.canvas = this._canvas;
     this._chart.draw(this._points);
-    // Draw detail overlay on canvas if a point is selected
+    // Draw overlay: comparison if 2 selected, detail if 1
     if (this._selectedIdx !== null && this._selectedIdx !== undefined) {
-      this._drawDetailOnCanvas(this._selectedIdx);
+      if (this._selectedIdx2 !== null && this._selectedIdx2 !== undefined) {
+        this._drawCompareOnCanvas(this._selectedIdx, this._selectedIdx2);
+      } else {
+        this._drawDetailOnCanvas(this._selectedIdx);
+      }
     }
+    this._updateLegendSelection();
+  }
+
+  _updateLegendSelection() {
+    if (!this._legendEl) return;
+    const items = this._legendEl.querySelectorAll('.legend-item');
+    items.forEach(item => {
+      const idx = parseInt(item.dataset.idx);
+      const isSel = (idx === this._selectedIdx || idx === this._selectedIdx2);
+      item.dataset.selected = isSel ? 'true' : 'false';
+      if (isSel) {
+        const color = this._points && this._points[idx] ? this._points[idx].color : '';
+        item.style.setProperty('--legend-sel-color', color);
+      } else {
+        item.style.removeProperty('--legend-sel-color');
+      }
+    });
   }
 
   _drawDetailOnCanvas(idx) {
@@ -734,6 +861,115 @@ class PsychrometricCard extends HTMLElement {
     });
   }
 
+  _drawCompareOnCanvas(idxA, idxB) {
+    if (!this._points || !this._points[idxA] || !this._points[idxB]) return;
+    const pA = this._points[idxA];
+    const pB = this._points[idxB];
+    if (pA.temperature === null || pA.humidity === null) return;
+    if (pB.temperature === null || pB.humidity === null) return;
+
+    const TA = pA.temperature, HRA = pA.humidity;
+    const TB = pB.temperature, HRB = pB.humidity;
+    const RA = this.calc.calcR(HRA, TA) * 1000;
+    const RB = this.calc.calcR(HRB, TB) * 1000;
+    const TrA = this.calc.calcTr(HRA, TA);
+    const TrB = this.calc.calcTr(HRB, TB);
+    const hA = this.calc.calcEnthalpie(TA, RA / 1000);
+    const hB = this.calc.calcEnthalpie(TB, RB / 1000);
+
+    const ctx = this._canvas.getContext('2d');
+    const margin = this._chart.margin;
+
+    // Draw line between points
+    const xA = this._chart.toCanvasX(TA);
+    const yA = this._chart.toCanvasY(RA);
+    const xB = this._chart.toCanvasX(TB);
+    const yB = this._chart.toCanvasY(RB);
+    ctx.save();
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(xA, yA);
+    ctx.lineTo(xB, yB);
+    ctx.stroke();
+    ctx.restore();
+
+    // Table layout
+    const tableW = 280;
+    const lineH = 18;
+    const colLabel = 70;
+    const colA = 75;
+    const colB = 75;
+    const colDelta = 60;
+    const headerH = 26;
+    const rows = [
+      ['Temp.', TA.toFixed(1) + '\u00b0C', TB.toFixed(1) + '\u00b0C', (TB - TA).toFixed(1) + '\u00b0C'],
+      ['HR', HRA.toFixed(1) + '%', HRB.toFixed(1) + '%', (HRB - HRA).toFixed(1) + '%'],
+      ['Abs.', RA.toFixed(2) + ' g/kg', RB.toFixed(2) + ' g/kg', (RB - RA).toFixed(2)],
+      ['Rosee', (TrA !== null ? TrA.toFixed(1) : '--') + '\u00b0C', (TrB !== null ? TrB.toFixed(1) : '--') + '\u00b0C',
+        (TrA !== null && TrB !== null ? (TrB - TrA).toFixed(1) : '--') + '\u00b0C'],
+      ['Enthalpie', hA.toFixed(1) + ' kJ/kg', hB.toFixed(1) + ' kJ/kg', (hB - hA).toFixed(1)],
+    ];
+    const tableH = headerH + lineH * rows.length + 10;
+    const tableX = margin.left + 10;
+    const tableY = margin.top + 10;
+
+    // Background
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+    ctx.beginPath();
+    ctx.roundRect(tableX, tableY, tableW, tableH, 8);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(tableX, tableY, tableW, tableH, 8);
+    ctx.stroke();
+
+    // Header row: point names
+    const hdrY = tableY + 18;
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillText('', tableX + 10, hdrY);
+    ctx.fillStyle = pA.color;
+    ctx.textAlign = 'center';
+    ctx.fillText('\u25cf ' + pA.name, tableX + colLabel + colA / 2, hdrY);
+    ctx.fillStyle = pB.color;
+    ctx.fillText('\u25cf ' + pB.name, tableX + colLabel + colA + colB / 2, hdrY);
+    ctx.fillStyle = '#ffc107';
+    ctx.fillText('\u0394', tableX + colLabel + colA + colB + colDelta / 2, hdrY);
+
+    // Separator
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(tableX + 8, tableY + headerH);
+    ctx.lineTo(tableX + tableW - 8, tableY + headerH);
+    ctx.stroke();
+
+    // Data rows
+    ctx.font = '11px sans-serif';
+    rows.forEach((row, i) => {
+      const y = tableY + headerH + i * lineH + 14;
+      // Label
+      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.textAlign = 'left';
+      ctx.fillText(row[0], tableX + 10, y);
+      // Value A
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.fillText(row[1], tableX + colLabel + colA / 2, y);
+      // Value B
+      ctx.fillText(row[2], tableX + colLabel + colA + colB / 2, y);
+      // Delta
+      ctx.fillStyle = '#ffc107';
+      ctx.font = 'bold 11px sans-serif';
+      ctx.fillText(row[3], tableX + colLabel + colA + colB + colDelta / 2, y);
+      ctx.font = '11px sans-serif';
+    });
+  }
+
   _showDetail(idx) {
     if (!this._points || !this._points[idx]) return;
     const p = this._points[idx];
@@ -744,8 +980,8 @@ class PsychrometricCard extends HTMLElement {
 
   _hideDetail() {
     this._selectedIdx = null;
+    this._selectedIdx2 = null;
     this._drawChart();
-  }
   }
 
   getCardSize() { return 6; }
