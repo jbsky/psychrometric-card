@@ -10,6 +10,7 @@ A custom Lovelace card that displays an interactive psychrometric (Mollier) diag
 - Interactive legend with click-to-toggle visibility per sensor
 - Quick filter buttons: Show All / Hide All / Indoor / Outdoor
 - Two-point comparison: click two sensors to see the difference between them
+- Optional template sensors, so the computed values can be recorded and graphed
 - Comfort zone visualization
 - Relative humidity curves (10% to 100%)
 - Enthalpy lines
@@ -104,6 +105,41 @@ To go back to a solid panel, name a colour:
 type: custom:psychrometric-card
 background: "#1c1c1e"
 ```
+
+## Recording the computed values
+
+The card works out absolute humidity, dew point and enthalpy to draw a point, then throws
+them away on the next redraw. Nothing is recorded, so none of it can be graphed over time or
+used in an automation — and a Lovelace card cannot create entities, that is an integration's
+job.
+
+What it can do is hand you the maths. `custom_templates/psychrometrics.jinja` holds the same
+formulas the card uses, as Jinja macros, so Home Assistant can compute the values itself:
+
+1. Copy `custom_templates/psychrometrics.jinja` into `<config>/custom_templates/`. HACS only
+   downloads the card itself, so take this file from the repository or the release archive.
+2. Generate the sensors from the config you already wrote for the card — three per
+   temperature/humidity pair, which nobody should type by hand:
+
+   ```bash
+   python3 tools/generate_template_sensors.py card.yaml >> template.yaml
+   ```
+
+3. Call the `homeassistant.reload_custom_templates` and `template.reload` services. No
+   restart, and none needed when you edit the macros later.
+
+You get `sensor.<name>_absolute_humidity` (g/kg), `sensor.<name>_dew_point` (°C) and
+`sensor.<name>_enthalpy` (kJ/kg) per pair, each with `state_class: measurement` so they are
+recorded as statistics.
+
+Dew point carries an availability guard on 0–60 °C, the range where Magnus-Tetens means
+anything: a freezer reports `unavailable` rather than a plausible-looking number. Pressure is
+taken as a constant 101325 Pa, exactly as the card does — at 300 m of altitude the absolute
+humidity is off by around 3.5 %, and the macros take a `pressure` argument if that matters
+to you.
+
+The macros are checked against the card's own `PsychroCalc` over 2820 points (T −20…50 °C,
+RH 5…100 %): identical values, identical dew-point validity domain.
 
 ## Understanding the Chart
 

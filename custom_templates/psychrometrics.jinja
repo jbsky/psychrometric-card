@@ -1,0 +1,61 @@
+{#-
+  Psychrometrics -- macros shared by the template sensors.
+
+  A transcription of the formulas in custom:psychrometric-card (class PsychroCalc),
+  checked numerically against the JS before release: 2820 points over a grid of
+  T = -20..50 C in steps of 0.5 and RH = 5..100 % in steps of 5, zero deviation on all
+  three quantities, dew-point validity domain included.
+
+  Pressure is taken as a constant 101325 Pa (sea level), exactly as the card does -- it
+  has no pressure sensor to hand it either. At 300 m the absolute humidity is off by
+  roughly 3.5 %, so pass your own pressure if that matters to you.
+
+  Install: copy this file to <config>/custom_templates/psychrometrics.jinja, then call
+  homeassistant.reload_custom_templates -- no restart needed, and none needed on edit.
+
+  Use from template.yaml:
+    {% from 'psychrometrics.jinja' import absolute_humidity %}
+    {{ absolute_humidity(t, rh) }}
+-#}
+
+{#- Saturation vapour pressure (Pa), Antoine equation. The second branch covers
+    99-374 C: useless in a house, kept so the two implementations agree everywhere. -#}
+{%- macro _pvs(t) -%}
+  {%- if t > 99 and t <= 374 -%}
+    {{ 10 ** (8.14019 - 1810.94 / (244.485 + t)) / 0.0075 }}
+  {%- else -%}
+    {{ 10 ** (8.07131 - 1730.63 / (233.426 + t)) / 0.0075 }}
+  {%- endif -%}
+{%- endmacro -%}
+
+{#- Absolute humidity, in grams of water per kilogram of dry air. -#}
+{%- macro absolute_humidity(t, rh, pressure=101325) -%}
+  {%- set pvs = _pvs(t) | float -%}
+  {%- set pv = rh / 100 * pvs -%}
+  {%- set ratio = 0.01801 / 0.028964 -%}
+  {{ (ratio * pv / (pressure - pv) * 1000) | round(2) }}
+{%- endmacro -%}
+
+{#- Dew point (C), Magnus-Tetens. Outside 0-60 C, or RH outside 0-100 %, the card draws
+    nothing: this renders an empty string so the sensor goes unknown rather than showing
+    a number that means nothing. Pair it with an availability template on the same range. -#}
+{%- macro dew_point(t, rh) -%}
+  {%- if t < 0 or t > 60 or rh < 0.01 or rh > 100 -%}
+  {%- else -%}
+    {%- set a = 17.27 -%}
+    {%- set b = 237.7 -%}
+    {%- set alpha = a * t / (b + t) + ((rh / 100) | log) -%}
+    {{ (b * alpha / (a - alpha)) | round(2) }}
+  {%- endif -%}
+{%- endmacro -%}
+
+{#- Specific enthalpy of moist air (kJ per kg of dry air). -#}
+{%- macro enthalpy(t, rh, pressure=101325) -%}
+  {%- set pvs = _pvs(t) | float -%}
+  {%- set pv = rh / 100 * pvs -%}
+  {%- set ratio = 0.01801 / 0.028964 -%}
+  {%- set r = ratio * pv / (pressure - pv) -%}
+  {%- set cpa = 1.00567 + 1.6035e-5 * t -%}
+  {%- set cpv = 1.835 - 7.34e-4 * t -%}
+  {{ (cpa * t + r * (2501.6 + cpv * t)) | round(2) }}
+{%- endmacro -%}
