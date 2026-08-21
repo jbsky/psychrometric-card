@@ -5,6 +5,10 @@ const fs = require('fs');
 const path = require('path');
 
 function loadCard(store) {
+  return runCard(store, '');
+}
+
+function runCard(store, suffix) {
   let Card = null;
   global.HTMLElement = class { attachShadow() { return {}; } };
   global.customElements = {
@@ -17,9 +21,15 @@ function loadCard(store) {
     getItem: () => null, setItem: () => {}, removeItem: () => {},
   };
   const src = fs.readFileSync(path.join(__dirname, '..', 'dist', 'psychrometric-card.js'), 'utf8');
-  new Function(src)();
+  const result = new Function(src + suffix)();
   if (!Card) throw new Error('psychrometric-card was never defined');
-  return Card;
+  return suffix ? result : Card;
+}
+
+// Reaches a module-level helper that the card never exports: the file is evaluated as a
+// function body, so appending a return hands it back.
+function loadInternal(name, store) {
+  return runCard(store, '\nreturn ' + name + ';');
 }
 
 function memoryStorage(initial) {
@@ -45,4 +55,4 @@ function done(title) {
   process.exit(failures ? 1 : 0);
 }
 
-module.exports = { loadCard, memoryStorage, check, done };
+module.exports = { loadCard, loadInternal, memoryStorage, check, done };

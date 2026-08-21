@@ -23,6 +23,28 @@ const QUANTITY_WORDS = /^(temperature|temperatures|temp|humidite|humidity|hum|rh
 // and pairs with the very humidity sensor it was derived from -- a point on the chart that
 // is really the chart's own output. Anything else of the kind goes in `exclude`.
 const DERIVED_PLATFORMS = /^(psychrometrics|thermal_comfort)$/;
+
+// What the card says out loud. English is what it falls back to; a language listed here
+// overrides it, matched on the first part of the code so fr-CA reads as fr.
+const STRINGS = {
+  en: {
+    sensors: 'Sensors', show_all: 'Show all', hide_all: 'Hide all',
+    comfort_zone: 'Comfort zone',
+    temperature: 'Temperature', temperature_short: 'Temp.', humidity: 'RH',
+    absolute: 'Abs', dew_point: 'Dew pt', enthalpy: 'Enthalpy',
+  },
+  fr: {
+    sensors: 'Capteurs', show_all: 'Tout afficher', hide_all: 'Tout masquer',
+    comfort_zone: 'Zone de confort',
+    temperature: 'Temp\u00e9rature', temperature_short: 'Temp.', humidity: 'HR',
+    absolute: 'Abs', dew_point: 'Pt ros\u00e9e', enthalpy: 'Enthalpie',
+  },
+};
+
+function stringsFor(language) {
+  const code = String(language || 'en').toLowerCase().split(/[-_]/)[0];
+  return Object.assign({}, STRINGS.en, STRINGS[code] || {});
+}
 // Longest label a legend cell holds without truncating at the widths this card is used at.
 const MAX_LABEL = 32;
 // Whether the sensor list under the chart is folded. Shared by every card on the origin:
@@ -105,6 +127,7 @@ class PsychroChart {
     this.Ymax = config.humidity_max !== undefined ? config.humidity_max : 25;
 
     this.dark_mode = config.dark_mode !== undefined ? config.dark_mode : true;
+    this.strings = config.strings || STRINGS.en;
 
     // Fond du canvas. Par defaut on ne peint rien : la <ha-card> porte deja le
     // fond du theme, verre translucide compris. Un fillRect opaque ici le
@@ -131,7 +154,8 @@ class PsychroChart {
     // La grille reprend la couleur du texte, diluee au trace.
     this.gridAlpha = 0.18;
 
-    this.margin = { top: 10, right: 25, bottom: 20, left: 5 };
+    // Room under the axis for two lines: the degree ticks, then the axis name.
+    this.margin = { top: 10, right: 25, bottom: 34, left: 5 };
     this.logicalWidth = 900;
     this.logicalHeight = config.height || 450;
   }
@@ -145,6 +169,23 @@ class PsychroChart {
 
   toCanvasY(R) {
     return this.logicalHeight - this.margin.bottom - (R - this.Ymin) / (this.Ymax - this.Ymin) * this.height;
+  }
+
+  // Everything drawn in chart units is confined to the plot rectangle. Dropping the
+  // samples that fall outside it instead would end each curve at its last point still
+  // inside -- up to half a degree short of the edge, at a different place on every
+  // curve, which is what made them look frayed. Clipping cuts them exactly on the
+  // boundary, and keeps a sensor reading off the scale from being painted over the axes.
+  clipToPlot(draw) {
+    const ctx = this.ctx;
+    const left = this.toCanvasX(this.Xmin);
+    const top = this.toCanvasY(this.Ymax);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(left, top, this.toCanvasX(this.Xmax) - left, this.toCanvasY(this.Ymin) - top);
+    ctx.clip();
+    draw();
+    ctx.restore();
   }
 
   // Les proprietes CSS personnalisees traversent les frontieres de shadow DOM
@@ -171,12 +212,14 @@ class PsychroChart {
       ctx.fillRect(0, 0, this.logicalWidth, this.logicalHeight);
     }
 
-    this.drawComfortZone();
-    this.drawGrid();
-    this.drawHRCurves();
-    this.drawEnthalpyLines();
+    this.clipToPlot(() => {
+      this.drawComfortZone();
+      this.drawGrid();
+      this.drawHRCurves();
+      this.drawEnthalpyLines();
+    });
     this.drawAxes();
-    this.drawPoints(points);
+    this.clipToPlot(() => this.drawPoints(points));
   }
 
   drawComfortZone() {
@@ -205,7 +248,7 @@ class PsychroChart {
     ctx.font = '11px sans-serif';
     ctx.textAlign = 'center';
     const midT = 23, midR = this.calc.calcR(50, 23) * 1000;
-    ctx.fillText('Zone de confort', this.toCanvasX(midT), this.toCanvasY(midR));
+    ctx.fillText(this.strings.comfort_zone, this.toCanvasX(midT), this.toCanvasY(midR));
   }
 
   drawGrid() {
@@ -240,7 +283,6 @@ class PsychroChart {
       let started = false;
       for (let T = this.Xmin; T <= this.Xmax; T += 0.5) {
         const R = this.calc.calcR(hr, T) * 1000;
-        if (R > this.Ymax || R < this.Ymin) continue;
         const x = this.toCanvasX(T);
         const y = this.toCanvasY(R);
         if (!started) { ctx.moveTo(x, y); started = true; }
@@ -322,12 +364,19 @@ class PsychroChart {
     for (let R = 0; R <= this.Ymax; R += 5) {
       ctx.fillText(R, this.toCanvasX(this.Xmax) + 5, this.toCanvasY(R) + 4);
     }
-    // Axis labels aligned with axes
+    // Axis names. The horizontal one goes under its own tick labels: on the same line
+    // it landed exactly where the leftmost degree is centred, and the two overprinted.
+    // The vertical one is the humidity ratio, in grams of water per kilogram of dry air
+    // -- "H" read as enthalpy, which is what the diagonals are.
     ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(
+      'T (\u00b0C)',
+      (this.toCanvasX(this.Xmin) + this.toCanvasX(this.Xmax)) / 2,
+      this.toCanvasY(this.Ymin) + 26,
+    );
     ctx.textAlign = 'left';
-    ctx.fillText('T (\u00b0C)', this.toCanvasX(this.Xmin), this.toCanvasY(this.Ymin) + 13);
-    ctx.textAlign = 'left';
-    ctx.fillText('H', this.toCanvasX(this.Xmax) + 5, this.toCanvasY(this.Ymax) - 5);
+    ctx.fillText('g/kg', this.toCanvasX(this.Xmax) + 5, this.toCanvasY(this.Ymax) - 5);
   }
 
   drawPoints(points) {
@@ -371,6 +420,7 @@ class PsychrometricCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
+    this._strings = stringsFor(hass.language || (hass.locale && hass.locale.language));
     // Once only, and before the first render: the legend is built from this list, and a
     // list that grew under the user would renumber the visibility they saved.
     if (this._config.auto_discover && !this._discovered) {
@@ -746,12 +796,12 @@ class PsychrometricCard extends HTMLElement {
         <details class="panel" id="panel">
           <summary>
             <span class="chevron"></span>
-            <span class="panel-title">Capteurs</span>
+            <span class="panel-title">${this._strings.sensors}</span>
             <span class="panel-count" id="panel-count"></span>
           </summary>
           <div class="toolbar">
-            <button id="btn-all">Tout afficher</button>
-            <button id="btn-none">Tout masquer</button>
+            <button id="btn-all">${this._strings.show_all}</button>
+            <button id="btn-none">${this._strings.hide_all}</button>
           </div>
           <div class="legend" id="legend"></div>
         </details>
@@ -873,7 +923,8 @@ class PsychrometricCard extends HTMLElement {
 
     // Canvas setup - responsive to container width
     this._aspectRatio = 900 / height; // width/height ratio
-    this._chart = new PsychroChart(this._canvas, this._config);
+    this._chart = new PsychroChart(
+      this._canvas, Object.assign({}, this._config, { strings: this._strings }));
     this.calc = new PsychroCalc();
     this._points = [];
 
@@ -1047,11 +1098,11 @@ class PsychrometricCard extends HTMLElement {
     const tableW = 170;
     const lineH = 18;
     const rows = [
-      ['Temperature', T.toFixed(1) + ' \u00b0C'],
-      ['HR', HR.toFixed(1) + ' %'],
-      ['Abs', R.toFixed(2) + ' g/kg'],
-      ['Pt rosee', (Tr !== null ? Tr.toFixed(1) : '--') + ' \u00b0C'],
-      ['Enthalpie', h.toFixed(1) + ' kJ/kg'],
+      [this._strings.temperature, T.toFixed(1) + ' \u00b0C'],
+      [this._strings.humidity, HR.toFixed(1) + ' %'],
+      [this._strings.absolute, R.toFixed(2) + ' g/kg'],
+      [this._strings.dew_point, (Tr !== null ? Tr.toFixed(1) : '--') + ' \u00b0C'],
+      [this._strings.enthalpy, h.toFixed(1) + ' kJ/kg'],
     ];
     const tableH = lineH * rows.length + 30; // +30 for title
     const tableX = margin.left + 10;
@@ -1140,12 +1191,12 @@ class PsychrometricCard extends HTMLElement {
     const colDelta = 60;
     const headerH = 26;
     const rows = [
-      ['Temp.', TA.toFixed(1) + '\u00b0C', TB.toFixed(1) + '\u00b0C', (TB - TA).toFixed(1) + '\u00b0C'],
-      ['HR', HRA.toFixed(1) + '%', HRB.toFixed(1) + '%', (HRB - HRA).toFixed(1) + '%'],
-      ['Abs.', RA.toFixed(2) + ' g/kg', RB.toFixed(2) + ' g/kg', (RB - RA).toFixed(2)],
-      ['Rosee', (TrA !== null ? TrA.toFixed(1) : '--') + '\u00b0C', (TrB !== null ? TrB.toFixed(1) : '--') + '\u00b0C',
+      [this._strings.temperature_short, TA.toFixed(1) + '\u00b0C', TB.toFixed(1) + '\u00b0C', (TB - TA).toFixed(1) + '\u00b0C'],
+      [this._strings.humidity, HRA.toFixed(1) + '%', HRB.toFixed(1) + '%', (HRB - HRA).toFixed(1) + '%'],
+      [this._strings.absolute, RA.toFixed(2) + ' g/kg', RB.toFixed(2) + ' g/kg', (RB - RA).toFixed(2)],
+      [this._strings.dew_point, (TrA !== null ? TrA.toFixed(1) : '--') + '\u00b0C', (TrB !== null ? TrB.toFixed(1) : '--') + '\u00b0C',
         (TrA !== null && TrB !== null ? (TrB - TrA).toFixed(1) : '--') + '\u00b0C'],
-      ['Enthalpie', hA.toFixed(1) + ' kJ/kg', hB.toFixed(1) + ' kJ/kg', (hB - hA).toFixed(1)],
+      [this._strings.enthalpy, hA.toFixed(1) + ' kJ/kg', hB.toFixed(1) + ' kJ/kg', (hB - hA).toFixed(1)],
     ];
     const tableH = headerH + lineH * rows.length + 10;
     const tableX = margin.left + 10;
