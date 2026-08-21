@@ -18,9 +18,11 @@ const POINT_COLORS = [
 // from an entity_id leaves a signature that a temperature and a humidity sensor of the
 // same room share, which is what pass 2 below matches on.
 const QUANTITY_WORDS = /^(temperature|temperatures|temp|humidite|humidity|hum|rh|sensor)$/;
-const OUTDOOR_HINT = /ext[\u00e9e]rieur|outdoor|jardin|garden|balcon|terrasse|dehors|outside/i;
 // Longest label a legend cell holds without truncating at the widths this card is used at.
 const MAX_LABEL = 32;
+// Whether the sensor list under the chart is folded. Shared by every card on the origin:
+// one preference about how much of the page this card takes up, not a per-card setting.
+const PANEL_STORAGE_KEY = 'psychro-card-panel';
 // Words that name the instrument or the quantity rather than the place. A device called
 // "Thermometre Alexandre" is Alexandre's room; "Temperature RdC" is the ground floor. Both
 // ends of the name are trimmed, because integrations disagree about which end they use.
@@ -417,7 +419,6 @@ class PsychrometricCard extends HTMLElement {
     return {
       areas: list(c.area !== undefined ? c.area : c.areas),
       exclude: list(c.exclude) || [],
-      outdoor_areas: list(c.outdoor_area !== undefined ? c.outdoor_area : c.outdoor_areas),
     };
   }
 
@@ -502,26 +503,18 @@ class PsychrometricCard extends HTMLElement {
       const plain = words.join(' ');
       return plain.charAt(0).toUpperCase() + plain.slice(1);
     };
-    const outdoor = (t) => {
-      const hint = (areaName(areaOf(t)) + ' ' + t).toLowerCase();
-      return opts.outdoor_areas
-        ? opts.outdoor_areas.some((a) => hint.indexOf(a) !== -1)
-        : OUTDOOR_HINT.test(hint);
-    };
-
     return pairs
-      .map(([t, h]) => ({ name: label(t), temperature: t, humidity: h, outdoor: outdoor(t) }))
+      .map(([t, h]) => ({ name: label(t), temperature: t, humidity: h }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  // The resolved list is needed outside the card too: tools/generate_template_sensors.py
-  // builds the template sensors from it. Printing it beats digging it out of the DOM.
+  // The resolved list is worth having outside the card: it is what to paste under
+  // `sensors:` to freeze the pairing, and what to check when a pair looks wrong.
   _publishSensorList(added, found) {
     const yaml = 'sensors:\n' + this._config.sensors.map((s) =>
       '  - name: "' + s.name + '"\n' +
       '    temperature: ' + s.temperature + '\n' +
-      '    humidity: ' + s.humidity +
-      (s.outdoor ? '\n    outdoor: true' : '')).join('\n');
+      '    humidity: ' + s.humidity).join('\n');
     try { window.__psychrometricCardSensors = yaml; } catch (e) { /* sandboxed */ }
     console.info('[psychrometric-card] auto_discover: ' + found + ' pair(s) found, ' +
       added + ' added to ' + (this._config.sensors.length - added) + ' declared. ' +
@@ -566,6 +559,15 @@ class PsychrometricCard extends HTMLElement {
     this._saveVisibility();
   }
 
+  // Open unless it was closed on purpose: a first visit should show what the card holds.
+  _loadPanelOpen() {
+    try {
+      return localStorage.getItem(PANEL_STORAGE_KEY) !== 'closed';
+    } catch (e) {
+      return true;
+    }
+  }
+
   _saveVisibility() {
     try {
       const raw = localStorage.getItem(this._getStorageKey());
@@ -602,6 +604,50 @@ class PsychrometricCard extends HTMLElement {
           width: 100%;
           border-radius: 8px;
           cursor: crosshair;
+        }
+        .panel {
+          margin-top: 8px;
+        }
+        .panel > summary {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 6px 8px;
+          border-radius: 6px;
+          border: 1px solid rgba(255,255,255,0.08);
+          font-size: 12px;
+          color: var(--primary-text-color, #ccc);
+          cursor: pointer;
+          user-select: none;
+          -webkit-user-select: none;
+          list-style: none;
+        }
+        /* Both are needed: the pseudo-element is WebKit's, list-style is everyone else's. */
+        .panel > summary::-webkit-details-marker {
+          display: none;
+        }
+        .panel > summary:hover {
+          background: rgba(255,255,255,0.08);
+        }
+        .chevron {
+          width: 0;
+          height: 0;
+          flex-shrink: 0;
+          border-left: 5px solid currentColor;
+          border-top: 4px solid transparent;
+          border-bottom: 4px solid transparent;
+          transition: transform 0.15s;
+        }
+        .panel[open] > summary .chevron {
+          transform: rotate(90deg);
+        }
+        .panel-title {
+          font-weight: 500;
+        }
+        .panel-count {
+          margin-left: auto;
+          opacity: 0.6;
+          font-variant-numeric: tabular-nums;
         }
         .toolbar {
           display: flex;
@@ -691,13 +737,18 @@ class PsychrometricCard extends HTMLElement {
       </style>
       <ha-card>
         <canvas id="psychro-canvas"></canvas>
-        <div class="toolbar">
-          <button id="btn-all">Tout afficher</button>
-          <button id="btn-none">Tout masquer</button>
-          <button id="btn-indoor">Interieur</button>
-          <button id="btn-outdoor">Exterieur</button>
-        </div>
-        <div class="legend" id="legend"></div>
+        <details class="panel" id="panel">
+          <summary>
+            <span class="chevron"></span>
+            <span class="panel-title">Capteurs</span>
+            <span class="panel-count" id="panel-count"></span>
+          </summary>
+          <div class="toolbar">
+            <button id="btn-all">Tout afficher</button>
+            <button id="btn-none">Tout masquer</button>
+          </div>
+          <div class="legend" id="legend"></div>
+        </details>
       </ha-card>
     `;
 
@@ -715,25 +766,16 @@ class PsychrometricCard extends HTMLElement {
       this._saveVisibility();
       this._applyVisibility();
     });
-    this.shadowRoot.getElementById('btn-indoor').addEventListener('click', () => {
-      const outdoorKeywords = ['exterieur', 'ext.', 'senas', 'garage', 'frigo', 'congelateur', 'terrain'];
-      this._config.sensors.forEach((s, i) => {
-        const name = (s.name || '').toLowerCase();
-        const isOutdoor = outdoorKeywords.some(k => name.includes(k));
-        this._visibility[i] = !isOutdoor;
-      });
-      this._saveVisibility();
-      this._applyVisibility();
-    });
-    this.shadowRoot.getElementById('btn-outdoor').addEventListener('click', () => {
-      const outdoorKeywords = ['exterieur', 'ext.', 'senas', 'terrain'];
-      this._config.sensors.forEach((s, i) => {
-        const name = (s.name || '').toLowerCase();
-        const isOutdoor = outdoorKeywords.some(k => name.includes(k));
-        this._visibility[i] = isOutdoor;
-      });
-      this._saveVisibility();
-      this._applyVisibility();
+
+    // Folded or not is remembered, so a card left closed opens closed. The chart is the
+    // point of this card; the list underneath is there when it is wanted.
+    this._panelEl = this.shadowRoot.getElementById('panel');
+    this._panelCountEl = this.shadowRoot.getElementById('panel-count');
+    this._panelEl.open = this._loadPanelOpen();
+    this._panelEl.addEventListener('toggle', () => {
+      try {
+        localStorage.setItem(PANEL_STORAGE_KEY, this._panelEl.open ? 'open' : 'closed');
+      } catch (e) { /* no storage: it just will not be remembered */ }
     });
 
     // Build legend DOM ONCE (event delegation for clicks)
@@ -911,6 +953,13 @@ class PsychrometricCard extends HTMLElement {
         item.dataset.visible = this._visibility[idx] ? 'true' : 'false';
       }
     });
+    // Worth saying on the summary line: folded, it is the only clue that something is
+    // hidden, and an empty chart otherwise looks broken.
+    if (this._panelCountEl) {
+      const total = this._config.sensors.length;
+      const shown = this._config.sensors.filter((_, i) => this._visibility[i] !== false).length;
+      this._panelCountEl.textContent = shown === total ? String(total) : shown + ' / ' + total;
+    }
     // Update points visibility
     if (this._points) {
       this._points.forEach((p, idx) => {

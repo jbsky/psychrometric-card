@@ -96,12 +96,6 @@ check('diagnostic, disabled and hidden entities are skipped',
 check('a device named after a sentence falls back to the entity_id',
   names(discover(true)), ['Freezer', 'Hallway', 'Lounge', 'Terrasse', 'Weather']);
 
-check('outdoor is guessed from the area or the entity_id',
-  discover(true).filter((s) => s.outdoor).map((s) => s.name), ['Terrasse', 'Weather']);
-check('outdoor_area: [] turns the guessing off',
-  discover({ outdoor_area: [] }).filter((s) => s.outdoor).length, 0);
-check('outdoor_area names what counts',
-  discover({ outdoor_area: ['garage'] }).filter((s) => s.outdoor).map((s) => s.name), ['Freezer']);
 
 check('area filters by name or id',
   names(discover({ area: ['Living room', 'garage'] })), ['Freezer', 'Lounge']);

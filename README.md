@@ -8,8 +8,8 @@ A custom Lovelace card that displays an interactive psychrometric (Mollier) diag
 
 - Real-time psychrometric diagram with sensor data points
 - Optional auto-discovery: pairs your temperature and humidity sensors by itself
-- Interactive legend with click-to-toggle visibility per sensor
-- Quick filter buttons: Show All / Hide All / Indoor / Outdoor
+- Interactive legend with click-to-toggle visibility per sensor, folded away when not wanted
+- Show All / Hide All
 - Two-point comparison: click two sensors to see the difference between them
 - Optional template sensors, so the computed values can be recorded and graphed
 - Comfort zone visualization
@@ -64,7 +64,6 @@ sensors:
     temperature: sensor.outside_temperature
     humidity: sensor.outside_humidity
     color: "#4caf50"
-    outdoor: true
 ```
 
 ### Options
@@ -102,13 +101,7 @@ Filters, all optional:
 auto_discover:
   area: [living room, garage]     # area id or name; omit for every area
   exclude: [fridge, freezer]      # skipped if the entity_id contains this
-  outdoor_area: [garden]          # what counts as outdoor for the Indoor/Outdoor buttons
 ```
-
-Without `outdoor_area`, a pair is marked outdoor when its area or entity_id looks like it
-(`outdoor`, `garden`, `terrace`, `exterieur`, `jardin`…). Set `outdoor_area: []` to switch
-the guessing off. Note that this follows the area you actually assigned in Home Assistant:
-a bedroom thermometer filed under *Outside* will be marked outdoor, correctly.
 
 `sensors:` still works alongside it — entries you write by hand are kept, and discovery only
 adds pairs whose temperature entity you have not already declared. Names come from the entity's friendly name, falling back to the device name and then to the
@@ -127,7 +120,6 @@ The resolved list is printed to the browser console and left in
 | `temperature` | string | required | Temperature sensor entity ID |
 | `humidity` | string | required | Relative humidity sensor entity ID |
 | `color` | string | auto | Point color (hex) |
-| `outdoor` | boolean | `false` | Mark as outdoor sensor (for filter button) |
 
 ## Theming
 
@@ -241,17 +233,20 @@ Each sensor appears as a colored dot on the chart, positioned according to its c
 
 - Use `panel` view type for full-width display
 - The card works best with 4-16 sensors
-- Outdoor sensors are useful for comparison with indoor conditions
+- Fold the sensor list away once the selection suits you: the chart is the point, and the
+  fold is remembered
 - The comfort zone helps identify which rooms need attention
 
 ## Tests
 
-The two heuristics that could quietly go wrong — which entities get paired, and what the
-legend remembers — are covered by plain node scripts, no framework and no install:
+The three things that could quietly go wrong — which entities get paired, what the legend
+remembers, and whether the fold stays as it was left — are covered by plain node scripts,
+no framework and no install:
 
 ```bash
 node test/discovery.test.js
 node test/visibility.test.js
+node test/panel.test.js
 ```
 
 ## Credits
