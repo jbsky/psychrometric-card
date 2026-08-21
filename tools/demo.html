@@ -80,7 +80,16 @@
   }
 
   const card = document.createElement('psychrometric-card');
-  card.setConfig({ temp_min: 0, temp_max: 40, humidity_max: 20, height: 430, sensors });
+  // The range comes from the query string, so the wide case -- where the steep curves
+  // crowd together -- can be checked without editing the file: demo.html?min=-25
+  const query = new URLSearchParams(location.search);
+  card.setConfig({
+    temp_min: Number(query.get('min') ?? 0),
+    temp_max: Number(query.get('max') ?? 40),
+    humidity_max: Number(query.get('humidity') ?? 20),
+    height: 430,
+    sensors,
+  });
   card.hass = { language: 'en', states, entities: {}, devices: {}, areas: {} };
   document.getElementById('host').appendChild(card);
 </script>

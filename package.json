@@ -1,6 +1,6 @@
 {
   "name": "psychrometric-card",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Psychrometric chart card for Home Assistant",
   "author": "Julien Blais",
   "license": "MIT",

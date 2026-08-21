@@ -156,7 +156,7 @@ class PsychroChart {
 
     // Room for what is written outside the plot: the unit above the right-hand ticks,
     // the ticks themselves, and under the plot two lines -- degrees, then the axis name.
-    this.margin = { top: 18, right: 38, bottom: 34, left: 8 };
+    this.margin = { top: 18, right: 38, bottom: 34, left: 16 };
     this.logicalWidth = 900;
     this.logicalHeight = config.height || 450;
   }
@@ -275,6 +275,9 @@ class PsychroChart {
   drawHRCurves() {
     const ctx = this.ctx;
     const hrLevels = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+    // Over a wide temperature range the steep curves all reach the top within a few
+    // degrees of each other, and their labels landed one on top of the next.
+    const placed = [];
     for (const hr of hrLevels) {
       const isSat = hr === 100;
       ctx.strokeStyle = isSat ? this.colors.saturation : this.colors.hr_lines;
@@ -305,9 +308,18 @@ class PsychroChart {
           // Right-aligned, so the text runs back along the curve into the plot. Written
           // rightwards it ran off the right edge and got cut by the clip.
           ctx.textAlign = 'right';
-          ctx.globalAlpha = 0.7;
-          ctx.fillText(hr + '%', this.toCanvasX(labelT) - 2, this.toCanvasY(labelR) - 4);
-          ctx.globalAlpha = 1;
+          const text = hr + '%';
+          const x = this.toCanvasX(labelT) - 2;
+          const y = this.toCanvasY(labelR) - 4;
+          const w = ctx.measureText(text).width;
+          const clash = placed.some(
+            (o) => Math.abs(o.y - y) < 11 && x - w < o.x + 3 && o.x - o.w < x + 3);
+          if (!clash) {
+            ctx.globalAlpha = 0.7;
+            ctx.fillText(text, x, y);
+            ctx.globalAlpha = 1;
+            placed.push({ x, y, w });
+          }
         }
       }
     }
