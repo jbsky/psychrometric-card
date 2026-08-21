@@ -20,7 +20,7 @@ A custom Lovelace card that displays an interactive psychrometric (Mollier) diag
   or translucent theme shows through, and text follows `--primary-text-color`
 - Fully responsive (desktop, tablet, mobile)
 - High-DPI / Retina display support
-- Visibility state persisted in localStorage
+- Visibility state remembered per sensor, so it survives the list changing
 
 ## Installation
 
@@ -111,9 +111,10 @@ the guessing off. Note that this follows the area you actually assigned in Home 
 a bedroom thermometer filed under *Outside* will be marked outdoor, correctly.
 
 `sensors:` still works alongside it — entries you write by hand are kept, and discovery only
-adds pairs whose temperature entity you have not already declared. Names come from the
-entity's friendly name, falling back to the device name and then to the entity_id, whichever
-first fits a legend cell.
+adds pairs whose temperature entity you have not already declared. Names come from the entity's friendly name, falling back to the device name and then to the
+entity_id — whichever first fits a legend cell — with the words naming the instrument or the
+quantity trimmed off both ends, so `Thermometer Alexandre` and `Temperature Hallway` become
+`Alexandre` and `Hallway`.
 
 The resolved list is printed to the browser console and left in
 `window.__psychrometricCardSensors`, ready to paste into the generator below.
@@ -201,6 +202,16 @@ Each sensor appears as a colored dot on the chart, positioned according to its c
 - The card works best with 4-16 sensors
 - Outdoor sensors are useful for comparison with indoor conditions
 - The comfort zone helps identify which rooms need attention
+
+## Tests
+
+The two heuristics that could quietly go wrong — which entities get paired, and what the
+legend remembers — are covered by plain node scripts, no framework and no install:
+
+```bash
+node test/discovery.test.js
+node test/visibility.test.js
+```
 
 ## Credits
 

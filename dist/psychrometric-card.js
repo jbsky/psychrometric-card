@@ -21,6 +21,10 @@ const QUANTITY_WORDS = /^(temperature|temperatures|temp|humidite|humidity|hum|rh
 const OUTDOOR_HINT = /ext[\u00e9e]rieur|outdoor|jardin|garden|balcon|terrasse|dehors|outside/i;
 // Longest label a legend cell holds without truncating at the widths this card is used at.
 const MAX_LABEL = 32;
+// Words that name the instrument or the quantity rather than the place. A device called
+// "Thermometre Alexandre" is Alexandre's room; "Temperature RdC" is the ground floor. Both
+// ends of the name are trimmed, because integrations disagree about which end they use.
+const LABEL_NOISE = /^[\s\-_]*(thermom[\u00e8e]tre|thermometer|hygrom[\u00e8e]tre|capteur|sonde|sensor|temp[\u00e9e]rature|temp|humidit[\u00e9e]|humidity)[\s\-_]+|[\s\-_]+(temp[\u00e9e]rature|temp|humidit[\u00e9e]|humidity)[\s\-_]*$/gi;
 
 // ===== Psychrometric Calculations =====
 class PsychroCalc {
@@ -480,7 +484,13 @@ class PsychrometricCard extends HTMLElement {
     // sentence -- Meteo-France ships "Meteo-France forecast for city <town> - <region>
     // (13) - FR". So each candidate has to earn its place by fitting; the entity_id,
     // which is always short, is the one that never fails.
-    const strip = (v) => String(v || '').replace(/\s*(temp[\u00e9e]rature|temp)\s*$/i, '').trim();
+    const strip = (v) => {
+      let out = String(v || '').trim();
+      let prev = null;
+      // Repeated because one pass leaves "Thermometre Temperature Salon" half-cleaned.
+      while (out !== prev) { prev = out; out = out.replace(LABEL_NOISE, '').trim(); }
+      return out;
+    };
     const label = (t) => {
       const fn = strip(hass.states[t].attributes.friendly_name);
       if (fn && fn.length <= MAX_LABEL) return fn;
@@ -519,27 +529,53 @@ class PsychrometricCard extends HTMLElement {
   }
 
   _getStorageKey() {
-    return 'psychro-card-visibility-v2';
+    return 'psychro-card-visibility-v3';
   }
 
+  // v2 stored visibility by position in the list, which stops meaning anything the moment
+  // the list changes order or length -- and auto_discover changes both, so hiding the
+  // freezer could come back as hiding a bedroom. It is keyed by the temperature entity
+  // now: a sensor keeps its state wherever it lands, and two cards sharing this key no
+  // longer overwrite each other just for having a sensor at the same index.
   _loadVisibility() {
     try {
-      const saved = localStorage.getItem(this._getStorageKey());
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        Object.keys(parsed).forEach(key => {
-          const idx = parseInt(key);
-          if (idx < this._config.sensors.length) {
-            this._visibility[idx] = parsed[key];
+      const raw = localStorage.getItem(this._getStorageKey());
+      if (raw) {
+        const saved = JSON.parse(raw);
+        this._config.sensors.forEach((sensor, idx) => {
+          if (saved[sensor.temperature] !== undefined) {
+            this._visibility[idx] = saved[sensor.temperature] !== false;
           }
         });
+        return;
       }
-    } catch (e) { /* ignore */ }
+      this._migrateVisibility();
+    } catch (e) { /* no storage, or corrupt: everything stays visible */ }
+  }
+
+  // One-off carry-over from v2, so nobody loses what they had hidden. The old key is left
+  // in place rather than cleaned up: another card on this origin may not have migrated yet,
+  // and it is never written again.
+  _migrateVisibility() {
+    const raw = localStorage.getItem('psychro-card-visibility-v2');
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    this._config.sensors.forEach((_, idx) => {
+      if (saved[idx] !== undefined) this._visibility[idx] = saved[idx] !== false;
+    });
+    this._saveVisibility();
   }
 
   _saveVisibility() {
     try {
-      localStorage.setItem(this._getStorageKey(), JSON.stringify(this._visibility));
+      const raw = localStorage.getItem(this._getStorageKey());
+      // Merge rather than replace: a sensor this card does not show may be recorded by
+      // another one, and dropping it would silently un-hide it there.
+      const out = raw ? JSON.parse(raw) : {};
+      this._config.sensors.forEach((sensor, idx) => {
+        out[sensor.temperature] = this._visibility[idx] !== false;
+      });
+      localStorage.setItem(this._getStorageKey(), JSON.stringify(out));
     } catch (e) { /* ignore */ }
   }
 
