@@ -245,15 +245,20 @@ Each sensor appears as a colored dot on the chart, positioned according to its c
 
 ## Tests
 
-The three things that could quietly go wrong — which entities get paired, what the legend
-remembers, and whether the fold stays as it was left — are covered by plain node scripts,
-no framework and no install:
+The four things that could quietly go wrong — which entities get paired, what the legend
+remembers, whether the fold stays as it was left, and whether every language answers to
+every label — are covered by plain node scripts, no framework and no install:
 
 ```bash
 node test/discovery.test.js
 node test/visibility.test.js
 node test/panel.test.js
+node test/strings.test.js
 ```
+
+`tools/demo.html` runs the card on invented sensors, outside Home Assistant: open it in a
+browser to try a change without deploying. `python3 tools/screenshot.py` shoots the image
+at the top of this page from that same page, so no real house ends up in it.
 
 ## Credits
 

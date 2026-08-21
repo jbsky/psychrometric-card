@@ -1,0 +1,86 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>psychrometric-card — demo</title>
+<!--
+  The card, on invented sensors, outside Home Assistant. Open it in a browser to try a
+  change without deploying, and see tools/screenshot.py, which shoots the README image
+  from this page so that no real house ends up in it.
+-->
+<style>
+  :root {
+    color-scheme: dark;
+    --primary-text-color: #e1e1e1;
+    --ha-card-background: rgba(38, 40, 48, 0.92);
+  }
+  body {
+    margin: 0;
+    padding: 24px;
+    background: #14161c;
+    font-family: Roboto, system-ui, sans-serif;
+  }
+  psychrometric-card {
+    display: block;
+    width: 900px;
+  }
+</style>
+<div id="host"></div>
+<!-- A classic script, not a module: Chromium refuses module imports over file://, and
+     the point of this page is that it opens by double-clicking it. -->
+<script src="../dist/psychrometric-card.js"></script>
+<script>
+  // Home Assistant's own <ha-card>, reduced to what this card needs of it. It has to
+  // carry its own styles: it is created inside the card's shadow root, where the page's
+  // stylesheet does not reach, and unstyled it would lay out inline with no width at all.
+  customElements.define('ha-card', class extends HTMLElement {
+    connectedCallback() {
+      if (this.shadowRoot) return;
+      this.attachShadow({ mode: 'open' }).innerHTML = `
+        <style>
+          :host {
+            display: block;
+            box-sizing: border-box;
+            padding: 12px;
+            border-radius: 14px;
+            background: var(--ha-card-background);
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+          }
+        </style>
+        <slot></slot>`;
+    }
+  });
+
+  const READINGS = {
+    'Living room': [21.4, 47],
+    'Kitchen': [22.6, 52],
+    'Bedroom': [18.9, 55],
+    'Bathroom': [23.4, 71],
+    'Study': [20.8, 44],
+    'Cellar': [14.2, 74],
+    'Garage': [11.6, 63],
+    'Outside': [7.8, 86],
+  };
+
+  const states = {};
+  const sensors = [];
+  for (const [name, [temperature, humidity]] of Object.entries(READINGS)) {
+    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+    states['sensor.' + id + '_temperature'] = {
+      state: String(temperature),
+      attributes: { device_class: 'temperature', unit_of_measurement: '°C' },
+    };
+    states['sensor.' + id + '_humidity'] = {
+      state: String(humidity),
+      attributes: { device_class: 'humidity', unit_of_measurement: '%' },
+    };
+    sensors.push({
+      name,
+      temperature: 'sensor.' + id + '_temperature',
+      humidity: 'sensor.' + id + '_humidity',
+    });
+  }
+
+  const card = document.createElement('psychrometric-card');
+  card.setConfig({ temp_min: 0, temp_max: 40, humidity_max: 20, height: 430, sensors });
+  card.hass = { language: 'en', states, entities: {}, devices: {}, areas: {} };
+  document.getElementById('host').appendChild(card);
+</script>

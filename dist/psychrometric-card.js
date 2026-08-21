@@ -154,8 +154,9 @@ class PsychroChart {
     // La grille reprend la couleur du texte, diluee au trace.
     this.gridAlpha = 0.18;
 
-    // Room under the axis for two lines: the degree ticks, then the axis name.
-    this.margin = { top: 10, right: 25, bottom: 34, left: 5 };
+    // Room for what is written outside the plot: the unit above the right-hand ticks,
+    // the ticks themselves, and under the plot two lines -- degrees, then the axis name.
+    this.margin = { top: 18, right: 38, bottom: 34, left: 8 };
     this.logicalWidth = 900;
     this.logicalHeight = config.height || 450;
   }
@@ -291,14 +292,21 @@ class PsychroChart {
       ctx.stroke();
       ctx.globalAlpha = 1;
       if (hr < 100) {
-        const labelT = this.Xmax - 5 - (100 - hr) * 0.3;
-        const labelR = this.calc.calcR(hr, labelT) * 1000;
-        if (labelR > this.Ymin && labelR < this.Ymax) {
+        // Walking in from the right edge to the first place the curve is low enough to
+        // write above: a fixed offset per curve put the steep ones outside the plot.
+        let labelT = null;
+        for (let T = this.Xmax - 0.5; T >= this.Xmin; T -= 0.5) {
+          if (this.calc.calcR(hr, T) * 1000 < this.Ymax * 0.88) { labelT = T; break; }
+        }
+        const labelR = labelT === null ? null : this.calc.calcR(hr, labelT) * 1000;
+        if (labelT !== null && labelR > this.Ymin) {
           ctx.fillStyle = this.colors.hr_lines;
           ctx.font = '10px sans-serif';
-          ctx.textAlign = 'left';
+          // Right-aligned, so the text runs back along the curve into the plot. Written
+          // rightwards it ran off the right edge and got cut by the clip.
+          ctx.textAlign = 'right';
           ctx.globalAlpha = 0.7;
-          ctx.fillText(hr + '%', this.toCanvasX(labelT) + 2, this.toCanvasY(labelR) - 3);
+          ctx.fillText(hr + '%', this.toCanvasX(labelT) - 2, this.toCanvasY(labelR) - 4);
           ctx.globalAlpha = 1;
         }
       }
@@ -346,15 +354,29 @@ class PsychroChart {
     const ctx = this.ctx;
     ctx.strokeStyle = this.colors.text;
     ctx.fillStyle = this.colors.text;
+    const left = this.toCanvasX(this.Xmin);
+    const right = this.toCanvasX(this.Xmax);
+    const top = this.toCanvasY(this.Ymax);
+    const bottom = this.toCanvasY(this.Ymin);
+
+    // The two axes proper, where the ticks are.
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.moveTo(this.toCanvasX(this.Xmin), this.toCanvasY(this.Ymin));
-    ctx.lineTo(this.toCanvasX(this.Xmax), this.toCanvasY(this.Ymin));
+    ctx.moveTo(left, bottom);
+    ctx.lineTo(right, bottom);
+    ctx.lineTo(right, top);
     ctx.stroke();
+
+    // And the other two sides, faint. The curves are cut on this line: without it drawn,
+    // a saturation curve leaving through the top ends in mid-air and looks unfinished.
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.35;
     ctx.beginPath();
-    ctx.moveTo(this.toCanvasX(this.Xmax), this.toCanvasY(this.Ymin));
-    ctx.lineTo(this.toCanvasX(this.Xmax), this.toCanvasY(this.Ymax));
+    ctx.moveTo(left, bottom);
+    ctx.lineTo(left, top);
+    ctx.lineTo(right, top);
     ctx.stroke();
+    ctx.globalAlpha = 1;
     ctx.font = '11px sans-serif';
     ctx.textAlign = 'center';
     for (let T = Math.ceil(this.Xmin / 5) * 5; T <= this.Xmax; T += 5) {
@@ -376,7 +398,7 @@ class PsychroChart {
       this.toCanvasY(this.Ymin) + 26,
     );
     ctx.textAlign = 'left';
-    ctx.fillText('g/kg', this.toCanvasX(this.Xmax) + 5, this.toCanvasY(this.Ymax) - 5);
+    ctx.fillText('g/kg', this.toCanvasX(this.Xmax) + 5, this.toCanvasY(this.Ymax) - 7);
   }
 
   drawPoints(points) {
@@ -1032,6 +1054,10 @@ class PsychrometricCard extends HTMLElement {
   _resizeCanvas() {
     const container = this.shadowRoot.querySelector('ha-card');
     if (!container || !this._canvas) return;
+    // Before the first layout the card has no width, and the fallback below would fix a
+    // narrow bitmap that CSS then stretches to full width -- fat, blurry text. The resize
+    // observer calls back the moment there is a real width to read.
+    if (!container.clientWidth) return;
     const dpr = window.devicePixelRatio || 1;
     const w = Math.max(container.clientWidth - 16, 280); // 8px padding each side
     const h = Math.round(w / this._aspectRatio);
