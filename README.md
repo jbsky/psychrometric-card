@@ -154,27 +154,68 @@ them away on the next redraw. Nothing is recorded, so none of it can be graphed 
 used in an automation — and a Lovelace card cannot create entities, that is an integration's
 job.
 
-What it can do is hand you the maths. `custom_templates/psychrometrics.jinja` holds the same
-formulas the card uses, as Jinja macros, so Home Assistant can compute the values itself:
+What it can do is hand you the maths, and keep the result in step with the house on its own.
+`tools/psychro_sensors.py` reads the entity registry and the card's own configuration —
+the same exclusions, the same hand-written entries — pairs the sensors with the same rule
+the card uses, and writes a template sensor file. Three sensors per pair, regenerated
+whenever the registry changes, so a new thermometer gets its derived sensors without you
+touching any YAML.
 
-1. Copy `custom_templates/psychrometrics.jinja` into `<config>/custom_templates/`. HACS only
-   downloads the card itself, so take this file from the repository or the release archive.
-2. Generate the sensors from the config you already wrote for the card — three per
-   temperature/humidity pair, which nobody should type by hand:
+**1. Install the pieces.** Copy `custom_templates/psychrometrics.jinja` into
+`<config>/custom_templates/` and `tools/psychro_sensors.py` into `<config>/scripts/`. HACS
+only downloads the card itself, so take both from the repository or the release archive.
 
-   ```bash
-   python3 tools/generate_template_sensors.py card.yaml >> template.yaml
-   ```
+**2. Make the template config a directory**, so a generated file can live beside the one you
+write by hand:
 
-   With `auto_discover`, `card.yaml` is not the card's config but the list it resolved —
-   copy `window.__psychrometricCardSensors` out of the browser console into a file.
+```yaml
+# configuration.yaml
+template: !include_dir_merge_list template/
+```
 
-3. Call the `homeassistant.reload_custom_templates` and `template.reload` services. No
-   restart, and none needed when you edit the macros later.
+Move whatever `template.yaml` held into `template/manual.yaml`; the script writes
+`template/psychro.yaml` and never touches anything else.
+
+**3. Wire the command and the automation:**
+
+```yaml
+# configuration.yaml
+shell_command:
+  psychro_sensors: python3 /config/scripts/psychro_sensors.py
+```
+
+```yaml
+# automations.yaml
+- id: psychro_sensors_sync
+  alias: "Psychrometrics: regenerate the derived sensors"
+  mode: restart          # the registry moves in bursts; each trigger restarts the wait
+  max_exceeded: silent
+  triggers:
+    - trigger: homeassistant
+      event: start
+    - trigger: event
+      event_type: entity_registry_updated
+  actions:
+    - delay: "00:00:30"
+    - action: shell_command.psychro_sensors
+      response_variable: result
+    - condition: template
+      value_template: "{{ 'changed' in (result.stdout | default('')) }}"
+    - action: template.reload
+```
+
+The script prints `changed` or `unchanged` and only rewrites the file when something moved,
+so an unrelated entity rename costs one run and no reload. Restart once for the new
+`template:` layout and the `shell_command`, and it looks after itself from there.
 
 You get `sensor.<name>_absolute_humidity` (g/kg), `sensor.<name>_dew_point` (°C) and
 `sensor.<name>_enthalpy` (kJ/kg) per pair, each with `state_class: measurement` so they are
-recorded as statistics.
+recorded as statistics. `unique_id` derives from the temperature entity, never from the
+display name: renaming a device in the UI does not orphan its history.
+
+Names, macro names and `unique_id` suffixes are all options — `--labels`, `--macros`,
+`--suffixes` — for anyone whose sensors and macros are not in English. Changing `--suffixes`
+renames every entity, so pick them once.
 
 Dew point carries an availability guard on 0–60 °C, the range where Magnus-Tetens means
 anything: a freezer reports `unavailable` rather than a plausible-looking number. Pressure is
