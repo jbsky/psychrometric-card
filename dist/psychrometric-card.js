@@ -13,6 +13,15 @@ const POINT_COLORS = [
   '#795548', '#607d8b'
 ];
 
+// ===== Auto-discovery =====
+// Words that name the quantity rather than the thing being measured. Stripping them
+// from an entity_id leaves a signature that a temperature and a humidity sensor of the
+// same room share, which is what pass 2 below matches on.
+const QUANTITY_WORDS = /^(temperature|temperatures|temp|humidite|humidity|hum|rh|sensor)$/;
+const OUTDOOR_HINT = /ext[\u00e9e]rieur|outdoor|jardin|garden|balcon|terrasse|dehors|outside/i;
+// Longest label a legend cell holds without truncating at the widths this card is used at.
+const MAX_LABEL = 32;
+
 // ===== Psychrometric Calculations =====
 class PsychroCalc {
   constructor() {
@@ -351,6 +360,17 @@ class PsychrometricCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
+    // Once only, and before the first render: the legend is built from this list, and a
+    // list that grew under the user would renumber the visibility they saved.
+    if (this._config.auto_discover && !this._discovered) {
+      this._discovered = true;
+      const found = this._discoverSensors();
+      const known = this._config.sensors.map((s) => s.temperature);
+      const added = found.filter((s) => known.indexOf(s.temperature) === -1);
+      this._config.sensors = this._config.sensors.concat(added);
+      this._resetVisibility();
+      this._publishSensorList(added.length, found.length);
+    }
     if (!this._initialized) {
       this._initialize();
       this._initialized = true;
@@ -359,8 +379,8 @@ class PsychrometricCard extends HTMLElement {
   }
 
   setConfig(config) {
-    if (!config.sensors || !config.sensors.length) {
-      throw new Error('You need to define at least one sensor pair');
+    if ((!config.sensors || !config.sensors.length) && !config.auto_discover) {
+      throw new Error('Define at least one sensor pair, or set auto_discover: true');
     }
     this._config = {
       dark_mode: config.dark_mode !== undefined ? config.dark_mode : true,
@@ -368,12 +388,134 @@ class PsychrometricCard extends HTMLElement {
       temp_min: config.temp_min !== undefined ? config.temp_min : -5,
       temp_max: config.temp_max !== undefined ? config.temp_max : 45,
       humidity_max: config.humidity_max !== undefined ? config.humidity_max : 25,
-      sensors: config.sensors,
+      sensors: config.sensors ? config.sensors.slice() : [],
+      auto_discover: this._discoveryOptions(config.auto_discover),
       height: config.height || 450,
     };
+    this._discovered = false;
+    this._resetVisibility();
+  }
+
+  _resetVisibility() {
     this._visibility = {};
     this._config.sensors.forEach((_, idx) => { this._visibility[idx] = true; });
     this._loadVisibility();
+  }
+
+  // `auto_discover: true` or a map of filters. Everything is lowercased once here so
+  // the matching below never has to think about case again.
+  _discoveryOptions(cfg) {
+    if (!cfg) return null;
+    const c = cfg === true ? {} : cfg;
+    const list = (v) => (v === undefined || v === null)
+      ? null
+      : (Array.isArray(v) ? v : [v]).map((x) => String(x).toLowerCase());
+    return {
+      areas: list(c.area !== undefined ? c.area : c.areas),
+      exclude: list(c.exclude) || [],
+      outdoor_areas: list(c.outdoor_area !== undefined ? c.outdoor_area : c.outdoor_areas),
+    };
+  }
+
+  // Pairs temperature and humidity sensors without a hand-written list, in two passes.
+  // Same device first -- unambiguous, it is the manufacturer saying these two readings
+  // come from one probe. Then same signature, and only when exactly one candidate
+  // matches: a house with two nameless candidates gets no pair rather than a wrong one.
+  _discoverSensors() {
+    const hass = this._hass;
+    const opts = this._config.auto_discover;
+    if (!hass || !opts) return [];
+    const reg = hass.entities || {};
+    const devices = hass.devices || {};
+    const areas = hass.areas || {};
+
+    const areaOf = (id) => {
+      const e = reg[id];
+      if (e && e.area_id) return e.area_id;
+      const d = e && e.device_id;
+      return (d && devices[d] && devices[d].area_id) || null;
+    };
+    const areaName = (aid) => (aid && areas[aid] && areas[aid].name) || aid || '';
+    const keep = (id) => {
+      const e = reg[id];
+      // entity_category covers the diagnostic readings a device exposes about itself
+      // (CPU probes, battery temperature): never a room.
+      if (e && (e.disabled_by || e.hidden || e.entity_category)) return false;
+      if (opts.exclude.some((x) => id.toLowerCase().indexOf(x) !== -1)) return false;
+      if (opts.areas) {
+        const aid = areaOf(id);
+        if (opts.areas.indexOf(String(aid).toLowerCase()) === -1 &&
+            opts.areas.indexOf(areaName(aid).toLowerCase()) === -1) return false;
+      }
+      return true;
+    };
+    const byClass = (dc) => Object.keys(hass.states).filter((id) =>
+      id.indexOf('sensor.') === 0 &&
+      hass.states[id].attributes.device_class === dc &&
+      keep(id));
+
+    const temps = byClass('temperature');
+    const hums = byClass('humidity');
+    const devOf = (id) => reg[id] && reg[id].device_id;
+    const signature = (id) => id.slice(id.indexOf('.') + 1).split('_')
+      .filter((w) => !QUANTITY_WORDS.test(w)).sort().join('_');
+
+    const taken = {};
+    const pairs = [];
+    for (const t of temps) {
+      const d = devOf(t);
+      if (!d) continue;
+      const h = hums.find((x) => devOf(x) === d && !taken[x]);
+      if (h) { taken[h] = true; pairs.push([t, h]); }
+    }
+    for (const t of temps) {
+      if (pairs.some((p) => p[0] === t)) continue;
+      const sig = signature(t);
+      if (!sig) continue;
+      const cands = hums.filter((x) => !taken[x] && signature(x) === sig);
+      if (cands.length === 1) { taken[cands[0]] = true; pairs.push([t, cands[0]]); }
+    }
+
+    // A legend cell is narrow, and some integrations name their device after a whole
+    // sentence -- Meteo-France ships "Meteo-France forecast for city <town> - <region>
+    // (13) - FR". So each candidate has to earn its place by fitting; the entity_id,
+    // which is always short, is the one that never fails.
+    const strip = (v) => String(v || '').replace(/\s*(temp[\u00e9e]rature|temp)\s*$/i, '').trim();
+    const label = (t) => {
+      const fn = strip(hass.states[t].attributes.friendly_name);
+      if (fn && fn.length <= MAX_LABEL) return fn;
+      const d = devOf(t);
+      const dev = d && devices[d];
+      const dn = dev ? strip(dev.name_by_user || dev.name) : '';
+      if (dn && dn.length <= MAX_LABEL) return dn;
+      const words = t.slice(t.indexOf('.') + 1).split('_').filter((w) => !QUANTITY_WORDS.test(w));
+      const plain = words.join(' ');
+      return plain.charAt(0).toUpperCase() + plain.slice(1);
+    };
+    const outdoor = (t) => {
+      const hint = (areaName(areaOf(t)) + ' ' + t).toLowerCase();
+      return opts.outdoor_areas
+        ? opts.outdoor_areas.some((a) => hint.indexOf(a) !== -1)
+        : OUTDOOR_HINT.test(hint);
+    };
+
+    return pairs
+      .map(([t, h]) => ({ name: label(t), temperature: t, humidity: h, outdoor: outdoor(t) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // The resolved list is needed outside the card too: tools/generate_template_sensors.py
+  // builds the template sensors from it. Printing it beats digging it out of the DOM.
+  _publishSensorList(added, found) {
+    const yaml = 'sensors:\n' + this._config.sensors.map((s) =>
+      '  - name: "' + s.name + '"\n' +
+      '    temperature: ' + s.temperature + '\n' +
+      '    humidity: ' + s.humidity +
+      (s.outdoor ? '\n    outdoor: true' : '')).join('\n');
+    try { window.__psychrometricCardSensors = yaml; } catch (e) { /* sandboxed */ }
+    console.info('[psychrometric-card] auto_discover: ' + found + ' pair(s) found, ' +
+      added + ' added to ' + (this._config.sensors.length - added) + ' declared. ' +
+      'Full list in window.__psychrometricCardSensors:\n' + yaml);
   }
 
   _getStorageKey() {

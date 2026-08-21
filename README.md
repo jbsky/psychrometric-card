@@ -7,6 +7,7 @@ A custom Lovelace card that displays an interactive psychrometric (Mollier) diag
 ## Features
 
 - Real-time psychrometric diagram with sensor data points
+- Optional auto-discovery: pairs your temperature and humidity sensors by itself
 - Interactive legend with click-to-toggle visibility per sensor
 - Quick filter buttons: Show All / Hide All / Indoor / Outdoor
 - Two-point comparison: click two sensors to see the difference between them
@@ -76,7 +77,46 @@ sensors:
 | `temp_max` | number | `45` | Maximum temperature on X axis (C) |
 | `humidity_max` | number | `25` | Maximum absolute humidity on Y axis (g/kg) |
 | `height` | number | `450` | Chart height in pixels |
-| `sensors` | list | required | List of sensor configurations |
+| `sensors` | list | required unless `auto_discover` | List of sensor configurations |
+| `auto_discover` | boolean or map | — | Find the temperature/humidity pairs instead of listing them. See below |
+
+### Auto-discovery
+
+Listing every pair by hand gets old at the third bedroom. `auto_discover` lets the card do it:
+
+```yaml
+type: custom:psychrometric-card
+auto_discover: true
+```
+
+It pairs sensors in two passes. First **by device**: two readings exposed by one device are
+one probe, and that is unambiguous. Then **by signature** — the entity_id stripped of the
+words that name the quantity, so `sensor.temperature_hallway` finds `sensor.humidity_hallway`
+— and only when exactly one candidate matches, so an ambiguous house gets no pair rather
+than a wrong one. Disabled, hidden and diagnostic entities are skipped, and so is any
+temperature sensor with no humidity counterpart.
+
+Filters, all optional:
+
+```yaml
+auto_discover:
+  area: [living room, garage]     # area id or name; omit for every area
+  exclude: [fridge, freezer]      # skipped if the entity_id contains this
+  outdoor_area: [garden]          # what counts as outdoor for the Indoor/Outdoor buttons
+```
+
+Without `outdoor_area`, a pair is marked outdoor when its area or entity_id looks like it
+(`outdoor`, `garden`, `terrace`, `exterieur`, `jardin`…). Set `outdoor_area: []` to switch
+the guessing off. Note that this follows the area you actually assigned in Home Assistant:
+a bedroom thermometer filed under *Outside* will be marked outdoor, correctly.
+
+`sensors:` still works alongside it — entries you write by hand are kept, and discovery only
+adds pairs whose temperature entity you have not already declared. Names come from the
+entity's friendly name, falling back to the device name and then to the entity_id, whichever
+first fits a legend cell.
+
+The resolved list is printed to the browser console and left in
+`window.__psychrometricCardSensors`, ready to paste into the generator below.
 
 ### Sensor Options
 
@@ -124,6 +164,9 @@ formulas the card uses, as Jinja macros, so Home Assistant can compute the value
    ```bash
    python3 tools/generate_template_sensors.py card.yaml >> template.yaml
    ```
+
+   With `auto_discover`, `card.yaml` is not the card's config but the list it resolved —
+   copy `window.__psychrometricCardSensors` out of the browser console into a file.
 
 3. Call the `homeassistant.reload_custom_templates` and `template.reload` services. No
    restart, and none needed when you edit the macros later.
