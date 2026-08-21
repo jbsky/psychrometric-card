@@ -18,6 +18,11 @@ const POINT_COLORS = [
 // from an entity_id leaves a signature that a temperature and a humidity sensor of the
 // same room share, which is what pass 2 below matches on.
 const QUANTITY_WORDS = /^(temperature|temperatures|temp|humidite|humidity|hum|rh|sensor)$/;
+// Integrations that compute psychrometry from a thermometer and a hygrometer. Their dew
+// point carries device_class: temperature, so left alone it comes back in as a measurement
+// and pairs with the very humidity sensor it was derived from -- a point on the chart that
+// is really the chart's own output. Anything else of the kind goes in `exclude`.
+const DERIVED_PLATFORMS = /^(psychrometrics|thermal_comfort)$/;
 // Longest label a legend cell holds without truncating at the widths this card is used at.
 const MAX_LABEL = 32;
 // Whether the sensor list under the chart is folded. Shared by every card on the origin:
@@ -446,6 +451,7 @@ class PsychrometricCard extends HTMLElement {
       // entity_category covers the diagnostic readings a device exposes about itself
       // (CPU probes, battery temperature): never a room.
       if (e && (e.disabled_by || e.hidden || e.entity_category)) return false;
+      if (e && DERIVED_PLATFORMS.test(e.platform || '')) return false;
       if (opts.exclude.some((x) => id.toLowerCase().indexOf(x) !== -1)) return false;
       if (opts.areas) {
         const aid = areaOf(id);
@@ -808,6 +814,9 @@ class PsychrometricCard extends HTMLElement {
       this._legendEl.appendChild(item);
     });
     this._legendBuilt = true;
+    // Puts the count on the summary line straight away: folded, it is the only sign that
+    // anything is hidden.
+    this._applyVisibility();
 
     // Click on canvas to select nearest point (supports 2-point comparison)
     this._canvas.addEventListener('click', (e) => {

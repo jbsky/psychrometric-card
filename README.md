@@ -95,6 +95,12 @@ words that name the quantity, so `sensor.temperature_hallway` finds `sensor.humi
 than a wrong one. Disabled, hidden and diagnostic entities are skipped, and so is any
 temperature sensor with no humidity counterpart.
 
+Computed dew points are skipped too. A dew point carries `device_class: temperature` and
+usually sits on the device it was derived from, so left alone it would take that device's
+hygrometer for itself and plot the chart's own output as a measurement. The
+[psychrometrics integration](https://github.com/jbsky/ha-psychrometrics) and
+`thermal_comfort` are recognised by name; put anything else of the kind in `exclude`.
+
 Filters, all optional:
 
 ```yaml

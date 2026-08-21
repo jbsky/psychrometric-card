@@ -45,8 +45,14 @@ const hass = {
     'sensor.terrasse_temperature': {},
     'sensor.terrasse_humidity': {},
     'sensor.boiler_temperature': {},          // no humidity anywhere: not a pair
+    // this card's own output, coming back round: a dew point is a temperature by
+    // device_class, and it sits on the device it was derived from
+    'sensor.lounge_dew_point': { device_id: 'dev_lounge', platform: 'psychrometrics' },
+    'sensor.hallway_dew_point': { platform: 'thermal_comfort' },
   },
   states: {
+    'sensor.lounge_dew_point': state('temperature', 'Lounge Dew point'),
+    'sensor.hallway_dew_point': state('temperature', 'Hallway Dew point'),
     'sensor.lounge_temperature': state('temperature', 'Lounge Temperature'),
     'sensor.lounge_humidity': state('humidity', 'Lounge Humidity'),
     'sensor.temperature_hallway': state('temperature', 'Hallway Temperature'),
@@ -92,6 +98,12 @@ check('a temperature with no counterpart is skipped',
   ids(discover(true)).indexOf('sensor.boiler_temperature'), -1);
 check('diagnostic, disabled and hidden entities are skipped',
   ids(discover(true)).filter((id) => /gateway|old|spare/.test(id)), []);
+// Left in, the lounge dew point would take the lounge hygrometer for itself and the real
+// thermometer would find nothing left to pair with.
+check('computed dew points do not come back in as measurements',
+  ids(discover(true)).filter((id) => id.indexOf('dew_point') !== -1), []);
+check('and the pair they were derived from survives',
+  ids(discover(true)).indexOf('sensor.lounge_temperature') !== -1, true);
 
 check('a device named after a sentence falls back to the entity_id',
   names(discover(true)), ['Freezer', 'Hallway', 'Lounge', 'Terrasse', 'Weather']);
